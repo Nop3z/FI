@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/common.defs.json",
+  "title": "FI 契约公共定义 v0.1",
+  "description": "全部 FI 数据契约共享的基础类型。核心纪律：(1) 证据等级 observation|hypothesis|unknown 三值且必填；(2) 未采集到的字段显式写 \"unknown\"，禁止用 null/0/空串猜测；(3) 数值语义一律无符号整数（地址/寄存器值），原始十六进制字面量放 *_raw 字符串字段保留原样。",
+  "$defs": {
+    "schema_version": {
+      "type": "string",
+      "const": "0.2",
+      "description": "契约版本常量。语义化版本：破坏性变更进 major，加字段进 minor。变更必须记录在 docs/contracts/CHANGELOG.md。0.1→0.2（2026-11-09）：机制语义（trap/mcause/mtvec）经 S4 静态编码实测 + S10 仿真动态复现双证升 fact，状态语义文档 v0.2.0 同步正式确认节。",
+      "examples": ["0.2"]
+    },
+    "evidence_level": {
+      "type": "string",
+      "enum": ["observation", "hypothesis", "unknown"],
+      "description": "证据分级（必填）：observation=仪器/Provider 直接观测到的事实；hypothesis=由观测推导、未经证实；unknown=无法判定。候选路径、单位换算、语义解释默认 hypothesis 或 unknown，不得标 observation。",
+      "examples": ["observation", "hypothesis", "unknown"]
+    },
+    "unknown_string": {
+      "type": "string",
+      "const": "unknown",
+      "description": "显式缺失标记。",
+      "examples": ["unknown"]
+    },
+    "uint_or_unknown": {
+      "description": "无符号整数值，或显式 \"unknown\"。",
+      "anyOf": [
+        { "type": "integer", "minimum": 0 },
+        { "$ref": "#/$defs/unknown_string" }
+      ],
+      "examples": [2147487744, "unknown"]
+    },
+    "number_or_unknown": {
+      "description": "任意实数（含浮点统计量：比率/过散比/MDE 等），或显式 \"unknown\"。注意：统计量是推导值，其语义须在字段描述里写明口径（如 overdispersion_ratio=段间率方差/二项噪声方差）。",
+      "anyOf": [
+        { "type": "number" },
+        { "$ref": "#/$defs/unknown_string" }
+      ],
+      "examples": [190.05, 0.0084652, "unknown"]
+    },
+    "string_or_unknown": {
+      "description": "字符串值，或显式 \"unknown\"。",
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        { "$ref": "#/$defs/unknown_string" }
+      ],
+      "examples": ["0x<CODE_A>", "unknown"]
+    },
+    "boolean_or_unknown": {
+      "description": "布尔值，或显式 \"unknown\"。",
+      "anyOf": [
+        { "type": "boolean" },
+        { "$ref": "#/$defs/unknown_string" }
+      ],
+      "examples": [true, "unknown"]
+    },
+    "object_or_unknown": {
+      "description": "子结构整体，或显式 \"unknown\"（该 Provider 根本没采集这一层时用后者）。",
+      "anyOf": [
+        { "type": "object" },
+        { "$ref": "#/$defs/unknown_string" }
+      ],
+      "examples": [{ "mcause": 5 }, "unknown"]
+    },
+    "provider_name": {
+      "type": "string",
+      "enum": [
+        "uart", "trap", "crash_dump", "debug", "trace",
+        "external", "simulation", "csv_replay", "unknown"
+      ],
+      "description": "捕获来源 Provider 名。csv_replay/simulation 为离线实现阶段专用；硬件 Provider（uart/trap/crash_dump/debug/trace/external）实机上架后启用。",
+      "examples": ["uart", "simulation", "csv_replay", "unknown"]
+    },
+    "observation_level": {
+      "type": "string",
+      "enum": ["behavior", "processor_context", "execution_trace"],
+      "description": "三层观测模型：behavior=行为观测（UART/GPIO/复位，普遍可用）；processor_context=处理器上下文（PC/寄存器/CSR/内存，依赖芯片能力）；execution_trace=执行轨迹（指令流，依赖硬件支持）。三层可独立工作、互相补充。",
+      "examples": ["behavior", "processor_context", "execution_trace"]
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 带时区时间戳。无法获知真实时间时写 \"unknown\"。",
+      "anyOf": [
+        { "type": "string", "format": "date-time" },
+        { "$ref": "#/$defs/unknown_string" }
+      ],
+      "examples": ["2026-11-09T14:33:51+08:00", "unknown"]
+    },
+    "hex_raw": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]+$",
+      "description": "原始十六进制字面量（保留数据源原样，如 CSV 中的错误码）。",
+      "examples": ["0x<CODE_A>", "0x<CODE_F>"]
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "实例唯一标识。建议格式：{类型前缀}-{UTC日期}-{短随机}，如 ctx-20261109-a1b2c3；也可用 UUID。",
+      "examples": ["ctx-20261109-a1b2c3", "camp-<DATE>-0042"]
+    },
+    "data_ref": {
+      "type": "object",
+      "description": "对原始只读数据的引用。原始 ROM/CSV 永不修改，派生数据必须另存新路径。",
+      "required": ["kind", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["csv", "jsonl", "binary", "trace", "log", "other"],
+          "description": "数据种类。",
+          "examples": ["csv", "binary"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "相对仓库根的路径或稳定 URI。建议同时给出校验和字段以便复核。",
+          "examples": ["<DATASET>.csv", "<ROM_IMAGE>"]
+        },
+        "row_index": {
+          "$ref": "#/$defs/uint_or_unknown",
+          "description": "CSV/JSONL 中的 0 起始行号；二进制等无行概念的数据写 unknown。"
+        },
+        "checksum": {
+          "$ref": "#/$defs/string_or_unknown",
+          "description": "引用文件的 SHA-256（hex）。建议必附，防原始数据漂移。"
+        },
+        "byte_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "二进制数据的 [起始偏移, 长度] 字节区间；不适用时省略。",
+          "examples": [[0, 131072]]
+        }
+      }
+    }
+  }
+}

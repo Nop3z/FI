@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/campaign-record.schema.json",
+  "title": "CampaignRecord v0.1",
+  "description": "单次注入实验记录：一组注入参数 + 芯片响应 + 原始状态标签 + 原始数据引用。状态标签按数据源原始字面量记录（本批 CSV 标签语义均待用户确认，见 docs/contracts/status-semantics.md），语义解释不进本契约。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "params",
+    "response",
+    "evidence_level"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "campaign_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本条实验记录唯一 ID。",
+      "examples": ["camp-<DATE>-0042"]
+    },
+
+    "params": {
+      "type": "object",
+      "description": "注入参数。原始刻度必填；换算成 ns 的值在单位假设确认前一律 unknown。",
+      "required": ["raw_delay", "raw_pulse"],
+      "additionalProperties": false,
+      "properties": {
+        "raw_delay": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "原始刻度 delay 值（数据源字面量，本批 CSV 范围 2640-3190）。",
+          "examples": [3145]
+        },
+        "raw_pulse": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "原始刻度 pulse 值（数据源字面量，本批 CSV 范围 2-6）。",
+          "examples": [2]
+        },
+        "delay_ns": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "换算后的 ns 值。『1 raw = 10ns』是未证实的工作假设：确认前必须写 unknown。",
+          "examples": ["unknown"]
+        },
+        "pulse_ns": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "同 delay_ns，确认单位假设前必须写 unknown。",
+          "examples": ["unknown"]
+        },
+        "unit_assumption": {
+          "type": "object",
+          "description": "单位换算假设（显式声明，避免读者把 unknown 当事实）。",
+          "required": ["scale", "evidence_level"],
+          "additionalProperties": false,
+          "properties": {
+            "scale": {
+              "type": "string",
+              "description": "假设的换算关系，纯文本。",
+              "examples": ["1 raw unit = 10 ns"]
+            },
+            "evidence_level": {
+              "$ref": "common.defs.json#/$defs/evidence_level",
+              "description": "该假设的证据等级；未证实只能是 hypothesis 或 unknown。",
+              "examples": ["hypothesis"]
+            }
+          },
+          "examples": [{ "scale": "1 raw unit = 10 ns", "evidence_level": "hypothesis" }]
+        },
+        "injector_id": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "执行注入的 Injector 实现标识（可插拔，见 fi.loop.injector.Injector）。",
+          "examples": ["sim-injector-v0", "csv-replay", "unknown"]
+        },
+        "sim_trigger": {
+          "type": "object",
+          "description": "仿真域触发参数（SimFaultInjector 产出专用，可选）。与 raw_delay/raw_pulse（CSV 数据集刻度）不同域：仿真记录的 raw_delay/raw_pulse 应写 unknown，触发信息只在本对象承载——两种刻度禁止混入同一字段（消费方按字段聚合时会分裂语义）。枚举与 sim-trace 契约 fault_event.trigger/action/pulse 对齐。",
+          "required": ["trigger_mode", "trigger_value"],
+          "additionalProperties": false,
+          "properties": {
+            "trigger_mode": {
+              "type": "string",
+              "enum": ["pc", "seq", "cycle_estimate", "every"],
+              "description": "触发模式（同 sim-trace fault_event.trigger.mode）。",
+              "examples": ["seq", "pc"]
+            },
+            "trigger_value": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "触发值：seq 模式=指令序号（0 起）；pc 模式=地址；cycle_estimate=周期数；every=间隔。",
+              "examples": [3000]
+            },
+            "width_mode": {
+              "type": "string",
+              "enum": ["instruction_count", "single_event", "unknown"],
+              "description": "作用宽度模式（同 sim-trace fault_event.pulse.mode）。",
+              "examples": ["instruction_count", "single_event"]
+            },
+            "width_value": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "作用宽度值（受影响指令条数等）；single_event 模式写 unknown。",
+              "examples": [2, "unknown"]
+            },
+            "action_kind": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "注入动作类型（skip / flip_reg_bits / reg_write / mem_write）。",
+              "examples": ["skip", "flip_reg_bits", "unknown"]
+            }
+          },
+          "examples": [
+            { "trigger_mode": "seq", "trigger_value": 3000, "width_mode": "single_event", "width_value": "unknown", "action_kind": "skip" }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "raw_delay": 3145,
+          "raw_pulse": 2,
+          "delay_ns": "unknown",
+          "pulse_ns": "unknown",
+          "unit_assumption": { "scale": "1 raw unit = 10 ns", "evidence_level": "hypothesis" },
+          "injector_id": "csv-replay"
+        }
+      ]
+    },
+
+    "response": {
+      "type": "object",
+      "description": "芯片响应。*_raw 字段保留数据源字面量；state_label 语义待确认（unconfirmed）。",
+      "required": ["state_label", "state_label_semantics"],
+      "additionalProperties": false,
+      "properties": {
+        "state_label": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "原始状态标签，按数据源原样记录。本批 CSV 已见标签：FL / HANG / SUCCESS / UNEXPECTED / Fake_Success；新数据源可出现其他标签，语义全部待确认。",
+          "examples": ["SUCCESS", "FL", "HANG", "UNEXPECTED", "Fake_Success", "unknown"]
+        },
+        "state_label_semantics": {
+          "type": "string",
+          "const": "unconfirmed-v0.1",
+          "description": "标签语义状态常量：v0.1 阶段所有标签语义未经用户确认，消费方不得据标签语义做业务判断。",
+          "examples": ["unconfirmed-v0.1"]
+        },
+        "error_code_raw": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "响应错误码原始字面量（如 0x<CODE_A>/0x<CODE_B>/0x<CODE_C>/0x<CODE_D>/0x<CODE_F>/0x0001，含义待用户提供错误码表）。",
+          "examples": ["0x<CODE_A>", "unknown"]
+        },
+        "glitched_raw": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "glitched 列原始字面量（本批 CSV 取值 'glitched' 或空串）。",
+          "examples": ["glitched", "unknown"]
+        },
+        "unexpected_raw": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "unexpected 列原始字面量（本批 CSV 取值 OK/错误码/NONE/空串）。",
+          "examples": ["OK", "0x<CODE_B>", "unknown"]
+        },
+        "responded": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "观测级机械事实：数据源是否记录了响应 token（response/unexpected 任一列非空即 true）。不是解释级结论（'NONE' 等占位字面量的语义解释走 status-semantics.md §4 的 evidence 分级）。",
+          "examples": [true, false, "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "state_label": "SUCCESS",
+          "state_label_semantics": "unconfirmed-v0.1",
+          "error_code_raw": "unknown",
+          "glitched_raw": "glitched",
+          "unexpected_raw": "OK",
+          "responded": true
+        }
+      ]
+    },
+
+    "fault_context_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "本次实验采集到的 FaultContext.context_id 列表（三层观测各一条即多个引用）；无上下文为空数组。",
+      "examples": [["ctx-20261109-a1b2c3"], []]
+    },
+
+    "raw_data_ref": {
+      "description": "原始只读数据引用（CSV 行、trace 等）。",
+      "anyOf": [
+        { "$ref": "common.defs.json#/$defs/data_ref" },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [
+        { "kind": "csv", "path": "<DATASET>.csv", "row_index": 42, "checksum": "unknown" }
+      ]
+    },
+
+    "evidence_level": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "整条记录的证据分级（必填）。来自实机/CSV 原始观测=observation；仿真注入产出=hypothesis。",
+      "examples": ["observation", "hypothesis"]
+    },
+    "timestamp": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "实验时刻。",
+      "examples": ["2026-11-06T22:30:14+08:00", "unknown"]
+    }
+  }
+}

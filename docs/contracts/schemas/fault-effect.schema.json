@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/fault-effect.schema.json",
+  "title": "FaultEffect v0.3（位翻转效果枚举）",
+  "description": "承载『一条指令被打坏后会变成什么』：给定指令机器码与物理假设（毛刺把哪些位翻转），枚举全部变体并标注语义变化类别。对应方法论 docs/methodology-fault-effect-reasoning.md 步骤 6（crowbar-to-ground 的物理效果常是 1→0，不是『跳过指令』）。**硬约束**：confidence 恒为 hypothesis——变体是候选解释，不是已证实的物理过程；真实毛刺可能同时影响多条指令。禁止 fact。变体条目必须给 flipped_bit_positions（可复现的最小信息）与 mutated_code_hex（可直接喂给仿真器）。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "original_insn",
+    "physical_assumption",
+    "variants",
+    "summary",
+    "confidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "report_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本报告唯一 ID。",
+      "examples": ["fe-20261109-0001"]
+    },
+
+    "original_insn": {
+      "type": "object",
+      "description": "被翻转的原始指令（三件套：字节 / 地址 / 反汇编，缺一不可复现）。",
+      "required": ["bytes_hex", "addr", "disasm"],
+      "additionalProperties": false,
+      "properties": {
+        "bytes_hex": {
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{2})+$",
+          "description": "原始指令机器码（hex，小端字节序原样）。4 字节=32 位指令，2 字节=压缩指令。",
+          "examples": ["13051700", "0040"]
+        },
+        "addr": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "指令执行地址（uint）。影响借用 PC 相对寻址的指令反汇编。",
+          "examples": [553648260]
+        },
+        "disasm": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "原始指令反汇编文本；无法解码写 unknown。",
+          "examples": ["addi a0, a0, 1", "unknown"]
+        }
+      },
+      "examples": [
+        { "bytes_hex": "13051700", "addr": 553648260, "disasm": "addi a0, a0, 1" }
+      ]
+    },
+
+    "physical_assumption": {
+      "type": "object",
+      "description": "物理假设声明（毛刺如何改变位）。不同毛刺技术（crowbar-to-ground / EMFI / 时钟毛刺）效果不同，必须显式声明而不是隐式默认。",
+      "required": ["flip_mode", "max_flips", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "flip_mode": {
+          "type": "string",
+          "enum": ["one_to_zero", "zero_to_one", "both"],
+          "description": "翻转方向假设：one_to_zero=只把 1 翻成 0（crowbar-to-ground 常见效果，默认）；zero_to_one=只把 0 翻成 1；both=任意位。",
+          "examples": ["one_to_zero", "both"]
+        },
+        "max_flips": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "枚举的最大同时翻转位数（实测 1-6 位都有；越大组合数爆炸，需显式声明以便读者判断覆盖范围）。",
+          "examples": [4]
+        },
+        "fault_level": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "对应方法论的故障等级（Level 1-7：从单指令打成无效 addi 到多指令多寄存器同时损坏）；未分级写 unknown。",
+          "examples": ["Level 1", "unknown"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "物理假设的置信级别恒为 hypothesis（毛刺的物理机理未经芯片级证实）。",
+          "examples": ["hypothesis"]
+        },
+        "note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "假设说明（为什么选这个翻转方向）。",
+          "examples": ["crowbar-to-ground 类电压毛刺常见效果是把 1 位拉低"]
+        }
+      },
+      "examples": [
+        {
+          "flip_mode": "one_to_zero",
+          "max_flips": 4,
+          "fault_level": "unknown",
+          "confidence": "hypothesis",
+          "note": "crowbar-to-ground 常见效果"
+        }
+      ]
+    },
+
+    "variants": {
+      "type": "array",
+      "description": "位翻转变体清单（每条是『这条指令被打成什么样』的一个候选事实）。空数组=枚举无产出（如加密/全 0 指令无可翻位），此时必须给 reason。",
+      "items": { "$ref": "#/$defs/variant" },
+      "examples": [
+        [
+          {
+            "flipped_bit_positions": [0],
+            "mutated_code_hex": "12051700",
+            "mutated_insn": "addi a0, a0, 2",
+            "change_kind": "imm_changed",
+            "semantics_changed": true,
+            "confidence": "hypothesis"
+          }
+        ]
+      ]
+    },
+
+    "summary": {
+      "type": "object",
+      "description": "枚举汇总（按变化类别的分布 + 覆盖范围声明）。",
+      "required": ["by_change_kind", "n_variants_total"],
+      "additionalProperties": false,
+      "properties": {
+        "by_change_kind": {
+          "type": "object",
+          "description": "按 change_kind 统计的变体数（键为 change_kind 枚举值）。",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "examples": [{ "same": 3, "imm_changed": 12, "rd_changed": 4, "undecodable": 2 }]
+        },
+        "n_variants_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "变体总数（按当前 flip_mode/max_flips 的完整枚举结果）。",
+          "examples": [21]
+        },
+        "n_variants_semantically_changed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "语义发生改变（change_kind ≠ same）的变体数——这才是『打坏』的有效候选。",
+          "examples": [18]
+        },
+        "enumeration_complete": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "本次枚举是否覆盖到 max_flips 上限（true=完整；false/false 表示因规模截断，读者不得据此断言『无其他变体』）。",
+          "examples": [true, "unknown"]
+        },
+        "reason": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "变体为空或枚举不完整的原因；正常完整枚举写 unknown。",
+          "examples": ["max_flips 上限导致组合数截断", "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "by_change_kind": { "imm_changed": 12, "undecodable": 2 },
+          "n_variants_total": 21,
+          "n_variants_semantically_changed": 18,
+          "enumeration_complete": true,
+          "reason": "unknown"
+        }
+      ]
+    },
+
+    "confidence": {
+      "type": "string",
+      "const": "hypothesis",
+      "description": "报告整体置信级别恒为 hypothesis（变体是候选解释，非已证实物理过程）。禁止 fact/observation。",
+      "examples": ["hypothesis"]
+    },
+
+    "discipline": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "纪律声明（人读，随契约一起交付给消费方）。",
+      "examples": ["变体是候选解释；真实毛刺可能同时影响多条指令"]
+    },
+
+    "generated_at": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "生成时刻。",
+      "examples": ["2026-11-09T22:50:00+08:00", "unknown"]
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "不变量：variants 为空 ⇒ 必须给 summary.reason（空结果也要解释原因，不能静默）。",
+      "if": { "properties": { "variants": { "maxItems": 0 } }, "required": ["variants"] },
+      "then": {
+        "properties": {
+          "summary": { "required": ["reason"] }
+        }
+      }
+    }
+  ],
+
+  "$defs": {
+    "variant": {
+      "type": "object",
+      "description": "一个位翻转变体。flipped_bit_positions 是可复现的最小信息（知道翻哪些位就能重建机器码），mutated_code_hex 是可直接喂给仿真器的产物。",
+      "required": [
+        "flipped_bit_positions",
+        "mutated_code_hex",
+        "change_kind",
+        "semantics_changed",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "flipped_bit_positions": {
+          "type": "array",
+          "description": "被翻转的位位置（从 LSB=0 起算；单 bit 时为单元素数组）。",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 0 },
+          "examples": [[0], [3, 11]]
+        },
+        "mutated_code_hex": {
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{2})+$",
+          "description": "翻转后的机器码（hex，与原始指令等长）。",
+          "examples": ["12051700"]
+        },
+        "mutated_insn": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "翻转后指令的反汇编；无法解码写 unknown（此时 change_kind 必须是 undecodable）。",
+          "examples": ["addi a0, a0, 2", "unknown"]
+        },
+        "change_kind": {
+          "type": "string",
+          "enum": [
+            "same",
+            "rd_changed",
+            "rs_changed",
+            "imm_changed",
+            "opcode_changed",
+            "undecodable",
+            "nop_like"
+          ],
+          "description": "语义变化类别：same=反汇编文本相同（可能只改了保留位）；rd_changed=目的寄存器变；rs_changed=源寄存器变；imm_changed=立即数变；opcode_changed=操作码/指令类型变；undecodable=变成非法编码；nop_like=变成 nop 类。",
+          "examples": ["imm_changed", "opcode_changed", "undecodable"]
+        },
+        "semantics_changed": {
+          "type": "boolean",
+          "description": "语义是否改变（change_kind ≠ same 即 true）。语义未变的翻转单独归类，不与『打坏』混淆。",
+          "examples": [true, false]
+        },
+        "raw_diff_hex": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "原始值与翻转值的按位异或（hex，与指令等长）——一眼看出改了哪些位。",
+          "examples": ["01000000"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "单条变体的置信级别恒为 hypothesis（变体存在是枚举事实，但『真实毛刺就是这样』未证实。若需表达纯枚举事实，用 evidence_kind 而非抬 confidence）。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "flipped_bit_positions": [0],
+          "mutated_code_hex": "12051700",
+          "mutated_insn": "addi a0, a0, 2",
+          "change_kind": "imm_changed",
+          "semantics_changed": true,
+          "raw_diff_hex": "01000000",
+          "confidence": "hypothesis"
+        }
+      ]
+    }
+  }
+}

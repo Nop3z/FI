@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/observation-classification.schema.json",
+  "title": "ObservationClassification v0.3（观测结果五色分类）",
+  "description": "承载 hn security《Fault Injection - Down the Rabbit Hole》的五色分类法：把每次实验的观测按『PC 是否正确』与『目标寄存器是否符合预期』两轴分为五类，聚焦唯一有价值的红色类（PC 正确 + 目标寄存器错 = 命中目标指令）。**硬约束**：confidence 恒为 observation——分类是对已捕获观测的机械判定（PC 对不对、寄存器等不等），不是推断；但『为什么』的解释走 fault-explanation 契约（那份恒 hypothesis）。kind ↔ label 必须配对一致（semantic 层校验），is_interesting 必须与 kind 一致（只有 target_hit 为 true）。",
+  "type": "object",
+  "required": ["schema_version", "classification_id", "kind", "label", "is_interesting", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "classification_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本条分类唯一 ID。",
+      "examples": ["oc-20261109-0001"]
+    },
+
+    "kind": {
+      "type": "string",
+      "enum": ["normal", "restart", "pc_wrong", "missed_target", "target_hit"],
+      "description": "五类判定：normal=PC 正确 + 寄存器全对（未命中）；restart=CPU 重启（毛刺过长）；pc_wrong=PC 错（没走到目标代码）；missed_target=PC 正确 + 目标寄存器对但其他寄存器变（打到别处）；target_hit=**PC 正确 + 目标寄存器错（命中目标指令，唯一有价值的一类）**。",
+      "examples": ["target_hit", "normal"]
+    },
+
+    "label": {
+      "type": "string",
+      "enum": ["绿", "品红", "黄", "青", "红"],
+      "description": "五色标签（与 kind 一一配对：normal=绿 / restart=品红 / pc_wrong=黄 / missed_target=青 / target_hit=红）。UI 直接用它做色彩编码。",
+      "examples": ["红", "绿"]
+    },
+
+    "is_interesting": {
+      "type": "boolean",
+      "description": "是否值得深入分析（仅 target_hit=true）。**UI 用它决定是否进入『红色样本』队列**。",
+      "examples": [true, false]
+    },
+
+    "confidence": {
+      "type": "string",
+      "const": "observation",
+      "description": "分类结果的置信级别恒为 observation（对已捕获观测的机械比对，不是推断）。注意：『该观测为何如此』的解释属于 fault-explanation，恒 hypothesis。",
+      "examples": ["observation"]
+    },
+
+    "evidence": {
+      "type": "object",
+      "description": "判定所依据的观测事实（可复核：PC 实际/期望、目标寄存器实际/期望、其他寄存器变化、是否重启）。",
+      "required": ["pc_ok", "target_reg_ok"],
+      "additionalProperties": false,
+      "properties": {
+        "pc_ok": {
+          "type": "boolean",
+          "description": "PC 是否符合预期（是否走到目标代码）。",
+          "examples": [true, false]
+        },
+        "target_reg_ok": {
+          "type": "boolean",
+          "description": "目标寄存器值是否符合预期。",
+          "examples": [true, false]
+        },
+        "other_regs_changed": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "目标寄存器之外的其他寄存器是否变化（区分『打到别处』与『完全未命中』）。",
+          "examples": [true, false, "unknown"]
+        },
+        "restarted": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "是否发生 CPU 重启。",
+          "examples": [false, true, "unknown"]
+        },
+        "target_reg": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "目标寄存器名（判定『目标寄存器是否正确』的对象）。",
+          "examples": ["a6", "unknown"]
+        },
+        "expected_regs": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "期望的寄存器值（基线运行结果）。",
+          "examples": [{ "a6": 119 }, "unknown"]
+        },
+        "observed_regs": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "实际观测到的寄存器值。",
+          "examples": [{ "a6": 118 }, "unknown"]
+        },
+        "source": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "观测数据来源（CSV 行/捕获文件/仿真运行件）。",
+          "examples": ["<DATASET>.csv#row=42", "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "pc_ok": true,
+          "target_reg_ok": false,
+          "other_regs_changed": true,
+          "restarted": false,
+          "target_reg": "a6",
+          "expected_regs": { "a6": 119 },
+          "observed_regs": { "a6": 118 },
+          "source": "<DATASET>.csv#row=42"
+        }
+      ]
+    },
+
+    "note": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "分类说明（人读，解释该类别含义与下一步）。",
+      "examples": ["命中目标指令：PC 正确但目标寄存器值不符预期"]
+    },
+
+    "next_action": {
+      "type": "string",
+      "enum": [
+        "none",
+        "reduce_glitch_width",
+        "adjust_delay_window",
+        "enumerate_bitflips",
+        "simulate_effect",
+        "unknown"
+      ],
+      "description": "建议下一步：none=无需处理；reduce_glitch_width=毛刺过长需缩短（restart）；adjust_delay_window=调整 delay 窗口（pc_wrong）；enumerate_bitflips=做位翻转枚举（target_hit）；simulate_effect=仿真复现解释（target_hit 深挖）；unknown=未建议。",
+      "examples": ["enumerate_bitflips", "reduce_glitch_width"]
+    },
+
+    "experiment_ref": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "关联实验/记录 ID（如 CampaignRecord.campaign_id）。",
+      "examples": ["camp-<DATE>-0042", "unknown"]
+    },
+
+    "target_feature_ref": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "关联目标功能 ID（与 reverse-report.target_feature.id 对齐）。",
+      "examples": ["isp_write", "unknown"]
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "不变量 1（schema 级）：kind=target_hit ⇒ is_interesting 必须 true 且 label 必须『红』。",
+      "if": { "properties": { "kind": { "const": "target_hit" } }, "required": ["kind"] },
+      "then": {
+        "properties": {
+          "is_interesting": { "const": true },
+          "label": { "const": "红" }
+        }
+      }
+    },
+    {
+      "description": "不变量 2（schema 级）：is_interesting=true ⇒ kind 必须是 target_hit（只有红色类值得深挖）。",
+      "if": { "properties": { "is_interesting": { "const": true } }, "required": ["is_interesting"] },
+      "then": { "properties": { "kind": { "const": "target_hit" } } }
+    }
+  ],
+
+  "$defs": {
+    "kind_label_pairs": {
+      "type": "object",
+      "description": "kind ↔ label ↔ 颜色的规范配对表（契约常量，供 UI 与校验器共用；实体为五条固定映射）。",
+      "required": ["normal", "restart", "pc_wrong", "missed_target", "target_hit"],
+      "additionalProperties": false,
+      "properties": {
+        "normal": { "const": "绿", "examples": ["绿"] },
+        "restart": { "const": "品红", "examples": ["品红"] },
+        "pc_wrong": { "const": "黄", "examples": ["黄"] },
+        "missed_target": { "const": "青", "examples": ["青"] },
+        "target_hit": { "const": "红", "examples": ["红"] }
+      },
+      "examples": [
+        {
+          "normal": "绿",
+          "restart": "品红",
+          "pc_wrong": "黄",
+          "missed_target": "青",
+          "target_hit": "红"
+        }
+      ]
+    }
+  }
+}

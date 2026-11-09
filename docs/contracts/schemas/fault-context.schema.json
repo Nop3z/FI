@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/fault-context.schema.json",
+  "title": "FaultContext v0.1",
+  "description": "故障现场统一上下文：一个 CaptureProvider 一次采集的产物。每种 Provider 只填自己能确认的数据，没有采集到的字段显式写 \"unknown\"，禁止为填满上下文而猜测寄存器值或 PC。三层观测（behavior/processor_context/execution_trace）可独立出现。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "context_id",
+    "source_provider",
+    "observation_level",
+    "evidence_level"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "context_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本条上下文的唯一 ID，供 CampaignRecord.fault_context_refs 反向引用。",
+      "examples": ["ctx-20261109-a1b2c3"]
+    },
+    "campaign_id": {
+      "description": "关联的注入实验（CampaignRecord.campaign_id）；无法关联时写 unknown。",
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "examples": ["camp-<DATE>-0042", "unknown"]
+    },
+
+    "source_provider": {
+      "$ref": "common.defs.json#/$defs/provider_name",
+      "description": "采集来源 Provider。",
+      "examples": ["uart", "simulation"]
+    },
+    "observation_level": {
+      "$ref": "common.defs.json#/$defs/observation_level",
+      "description": "本条上下文所属观测层。一条 FaultContext 只描述一层；多层观测产生多条 FaultContext。",
+      "examples": ["behavior"]
+    },
+    "evidence_level": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "本条上下文整体证据分级（必填）。直接采集=observation；仿真重放重建=hypothesis；不可判定=unknown。",
+      "examples": ["observation"]
+    },
+
+    "timestamp": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "采集时刻。",
+      "examples": ["2026-11-06T22:30:14+08:00", "unknown"]
+    },
+
+    "pc": {
+      "$ref": "common.defs.json#/$defs/uint_or_unknown",
+      "description": "故障时刻 PC（无符号整数）。UART 等行为观测通常拿不到 PC，必须写 unknown。",
+      "examples": [2147487820, "unknown"]
+    },
+
+    "registers": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "通用寄存器快照：键为 RISC-V 寄存器名（x0~x31 或 ABI 名 ra/sp/gp/tp/t0-t6/s0-s11/a0-a7），值为 uint_or_unknown。只写实际采集到的寄存器；整块未采集写 \"unknown\"。禁止按典型值补全。",
+      "examples": [
+        { "a0": 1281, "ra": 2147487820, "sp": "unknown" },
+        "unknown"
+      ]
+    },
+
+    "csrs": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "CSR 快照：键为 CSR 名或地址（如 mcause/mepc/mtval/mstatus/0x307），值为 uint_or_unknown。CSR 语义随芯片而异，解释性结论放 correlation 或 AnalysisResult，不写在快照里。",
+      "examples": [
+        { "mcause": 5, "mepc": 2147487820, "mtval": 0 },
+        "unknown"
+      ]
+    },
+
+    "memory_snapshot": {
+      "description": "内存快照片段列表；未采集为空数组（不是 unknown，空数组本身就是明确的『无快照』）。",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["address", "size", "data_ref"],
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "片段起始地址。",
+            "examples": [2147483648]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "片段字节数。",
+            "examples": [256]
+          },
+          "data_ref": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "大块内容另存文件的路径；内联小片段可直接写 data_hex 并将 data_ref 置 unknown。",
+            "examples": ["data/derived/memdump-camp-0042.bin", "unknown"]
+          },
+          "data_hex": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "内联十六进制内容（仅小片段，<=256 字节建议内联）。",
+            "examples": ["13050000", "unknown"]
+          }
+        }
+      },
+      "examples": [
+        [{ "address": 2147483648, "size": 4, "data_ref": "unknown", "data_hex": "13050000" }]
+      ]
+    },
+
+    "behavior": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "Level 1 行为观测块（observation_level=behavior 时为主要内容）：UART/GPIO/复位等外部可见行为。字段：uart_response_raw（原始响应字面量）、error_code_raw（原始错误码字面量）、reset_observed、watchdog_fired。整层未采集写 \"unknown\"。",
+      "examples": [
+        {
+          "uart_response_raw": "0x<CODE_A>",
+          "error_code_raw": "0x<CODE_A>",
+          "reset_observed": false,
+          "watchdog_fired": "unknown"
+        },
+        "unknown"
+      ]
+    },
+
+    "execution_trace": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "Level 3 执行轨迹块：entries 为 [{pc, insn_bytes_hex, disasm}]（字段命名与 sim-trace 契约对齐：原始字节 hex 用 insn_bytes_hex，反汇编文本用 disasm）；大轨迹经 trace_ref 另存（仿真轨迹文件必须符合 sim-trace.schema.json）。注意：候选/仿真重建的轨迹不是真实硬件轨迹，evidence_level 必须降为 hypothesis。",
+      "examples": [
+        {
+          "trace_ref": "data/derived/trace-camp-0042.jsonl",
+          "entries": [
+            { "pc": 2147487816, "insn_bytes_hex": "004515", "disasm": "lw a1, 0(a0)" },
+            { "pc": 2147487820, "insn_bytes_hex": "73100730", "disasm": "csrrw zero, 0x307, t0" }
+          ]
+        },
+        "unknown"
+      ]
+    },
+
+    "correlation": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "基线-观测关联块：baseline_ref 指向正常执行基线（Execution Context）；confirmed_diffs 为可证实差异（evidence_level=observation）；hypothesized_diffs 为推测差异（evidence_level=hypothesis），两组必须分开、不得混写。结构差异项均含 {field, baseline_value, observed_value}。",
+      "examples": [
+        {
+          "baseline_ref": "base-target-chip-authcheck-v1",
+          "confirmed_diffs": [
+            { "field": "a0", "baseline_value": 0, "observed_value": 1281, "evidence_level": "observation" }
+          ],
+          "hypothesized_diffs": [
+            { "field": "pc_path", "baseline_value": "normal-return", "observed_value": "late-branch", "evidence_level": "hypothesis" }
+          ]
+        },
+        "unknown"
+      ]
+    },
+
+    "raw_data_ref": {
+      "description": "本条上下文的原始数据来源（只读）。",
+      "anyOf": [
+        { "$ref": "common.defs.json#/$defs/data_ref" },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [
+        { "kind": "csv", "path": "<DATASET>.csv", "row_index": 123456, "checksum": "unknown" }
+      ]
+    },
+
+    "notes": {
+      "type": "string",
+      "description": "自由文本备注。任何写进 notes 的推断都只是备注，不改变 evidence_level。",
+      "examples": ["UART 收到 0x<CODE_A>，PC 与寄存器均不可得。"]
+    }
+  }
+}

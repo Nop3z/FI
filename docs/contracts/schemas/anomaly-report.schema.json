@@ -1,0 +1,1927 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/anomaly-report.schema.json",
+  "title": "AnomalyReport v0.3（异常数据综合分析报告）",
+  "description": "承载 Phase 1 核心能力『分析异常数据』：一次运行产出一份自包含报告，回答『这批观测数据说明了什么、哪些结论站得住、哪些是设计看不见』。六块固定骨架（sections.{quality_and_stationarity, command_surface, frame_format, statistical_power, unknowns, evidence_chain}）：(1) 数据质量与非平稳性（强制前置门控）；(2) 命令面归因；(3) 帧格式解析（可缺省）；(4) 统计功效；(5) 待验证矛盾点；(6) 证据链。三条硬纪律：(a) 每个结论必带 confidence ∈ observation|hypothesis|unknown，未验证不得标 observation；(b) 每个结论必带 evidence_refs，指向 evidence_chain 中登记的条目（可回溯到数据行范围/ROM 地址/仿真运行件）；(c) statistical_caveats 必填四项——overdispersion_ratio / mde_abs / low_count_warning / time_confounding 是『数据非平稳』与『设计看不见窗口』两类误判的主要来源，UI 必须能逐项显示警示。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "generated_utc",
+    "input",
+    "sections",
+    "statistical_caveats",
+    "findings",
+    "confidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "report_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本报告唯一 ID。",
+      "examples": ["ana-20261109-anom0001"]
+    },
+
+    "generated_utc": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "报告生成时刻（UTC）。",
+      "examples": ["2026-11-09T12:20:00+00:00", "unknown"]
+    },
+
+    "tool": {
+      "type": "object",
+      "description": "生成器标识与可重放命令（复现性要求）。",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "生成器模块名。",
+          "examples": ["fi.analysis.anomaly_report"]
+        },
+        "version": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "生成器版本；未标注写 unknown。",
+          "examples": ["0.3.0", "unknown"]
+        },
+        "replay_command": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "可重放命令。",
+          "examples": ["fi analyze anomaly --input <data> --config <cfg> --out-prefix <p>"]
+        }
+      },
+      "examples": [
+        {
+          "name": "fi.analysis.anomaly_report",
+          "version": "0.3.0",
+          "replay_command": "fi analyze anomaly --input <data> --config <cfg> --out-prefix <p>"
+        }
+      ]
+    },
+
+    "input": {
+      "type": "object",
+      "description": "输入数据描述（可回溯到数据文件与行范围）。",
+      "required": ["path", "format", "n_rows"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "输入数据文件路径（相对仓库根）。",
+          "examples": ["data/derived/<DATASET>.typed.jsonl"]
+        },
+        "format": {
+          "type": "string",
+          "enum": ["csv", "jsonl", "typed_jsonl", "trace_jsonl", "bytes", "text", "unknown"],
+          "description": "数据格式（加载器自动识别或显式指定）。",
+          "examples": ["typed_jsonl", "csv"]
+        },
+        "n_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "实际参与分析的结构化记录数。",
+          "examples": [740209]
+        },
+        "n_rows_raw": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "数据源原始行数（含被跳过行）。",
+          "examples": [740209, "unknown"]
+        },
+        "checksum": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "输入文件 SHA-256（防数据漂移）；未计算写 unknown。",
+          "examples": ["unknown"]
+        },
+        "config_ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "分析配置来源（列映射/码域/码族/阶段映射均显式传入，通用代码零实例值）。",
+          "examples": ["data/derived/anomaly-report.config.json", "unknown"]
+        },
+        "has_byte_stream": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "输入是否含原始字节流（决定 frame_format 块是否可用）。",
+          "examples": [false, true, "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "path": "data/derived/<DATASET>.typed.jsonl",
+          "format": "typed_jsonl",
+          "n_rows": 740209,
+          "n_rows_raw": 740209,
+          "checksum": "unknown",
+          "config_ref": "data/derived/anomaly-report.config.json",
+          "has_byte_stream": false
+        }
+      ]
+    },
+
+    "sections": {
+      "type": "object",
+      "description": "六块骨架（顺序即阅读顺序；第 1 块是其余各块的强制前置门控）。",
+      "required": [
+        "quality_and_stationarity",
+        "command_surface",
+        "frame_format",
+        "statistical_power",
+        "unknowns",
+        "evidence_chain"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "quality_and_stationarity": { "$ref": "#/$defs/quality_section" },
+        "command_surface": { "$ref": "#/$defs/command_section" },
+        "frame_format": { "$ref": "#/$defs/frame_section" },
+        "statistical_power": { "$ref": "#/$defs/power_section" },
+        "unknowns": { "$ref": "#/$defs/unknowns_section" },
+        "evidence_chain": { "$ref": "#/$defs/evidence_section" }
+      },
+      "examples": [
+        {
+          "quality_and_stationarity": {
+            "gate_passed": true,
+            "gate_failures": ["数据非平稳（见 nonstationary_labels）"],
+            "n_rows": 740209,
+            "labels": ["FL", "HANG", "SUCCESS"],
+            "label_counts": { "FL": 646289, "HANG": 86464, "SUCCESS": 4616 },
+            "nonstationarity_detected": true,
+            "nonstationary_labels": [],
+            "stationarity_verdict": "数据非平稳（示例）",
+            "post_gate_policy": "detrend_required",
+            "confidence": "observation",
+            "evidence_refs": ["ev-001"]
+          },
+          "command_surface": {
+            "available": true,
+            "reason": "unknown",
+            "background_state": "FL",
+            "code_taxonomy": [],
+            "code_families": [],
+            "code_phase_map": [],
+            "confidence": "observation",
+            "evidence_refs": ["ev-002"]
+          },
+          "frame_format": {
+            "available": false,
+            "reason": "输入数据不含字节流（CSV/JSONL 无原始字节通道）",
+            "confidence": "unknown",
+            "evidence_refs": []
+          },
+          "statistical_power": {
+            "available": true,
+            "reason": "unknown",
+            "n_points": 61,
+            "mean_repeats_per_point": 12134,
+            "per_label": [],
+            "confidence": "observation",
+            "evidence_refs": ["ev-003"]
+          },
+          "unknowns": {
+            "n_items": 1,
+            "items": [],
+            "discipline": "只登记证据不足以判定的项，每条给 resolve_by",
+            "confidence": "unknown",
+            "evidence_refs": []
+          },
+          "evidence_chain": {
+            "n_links": 1,
+            "links": [],
+            "discipline": "每条结论可回溯到数据行范围/ROM 地址区间/仿真运行件",
+            "confidence": "observation",
+            "evidence_refs": []
+          }
+        }
+      ]
+    },
+
+    "statistical_caveats": { "$ref": "#/$defs/statistical_caveats" },
+
+    "contradictions": {
+      "type": "array",
+      "description": "待验证矛盾点（与 unknowns 区分：此处是两条已成立的结论互相冲突，必有其一为假；unknowns 是缺证据）。无矛盾点时为空数组。",
+      "items": { "$ref": "#/$defs/contradiction" },
+      "examples": [
+        [
+          {
+            "contradiction_id": "C-001",
+            "description": "旧报告称行序随机化，但分段率检验显示强单调漂移",
+            "sides": [
+              { "claim": "行序随机化，不可当时间轴解释", "confidence": "hypothesis", "evidence_ref": "ev-001" },
+              { "claim": "FL 率 92.3%→83.6% 单调下降，过散比 190", "confidence": "observation", "evidence_ref": "ev-002" }
+            ],
+            "resolution": "两者可同时为真：lag-1 自相关对长程漂移不敏感",
+            "status": "resolved_both_valid",
+            "resolved_by_evidence_ref": "ev-002",
+            "confidence": "observation",
+            "evidence_refs": ["ev-001", "ev-002"]
+          }
+        ]
+      ]
+    },
+
+    "findings": {
+      "type": "array",
+      "description": "结论清单（每条必带 confidence + evidence_refs）。来源可为本次计算或既有报告（source 字段）。",
+      "items": { "$ref": "#/$defs/finding" },
+      "examples": [
+        [
+          {
+            "finding_id": "F-001",
+            "kind": "nonstationarity",
+            "severity": "blocking",
+            "statement": "数据强非平稳：FL 率由 92.3% 单调降至 83.6%（过散比 190）",
+            "confidence": "observation",
+            "evidence_refs": ["ev-001"],
+            "source": "this_run"
+          }
+        ]
+      ]
+    },
+
+    "unknowns": {
+      "type": "array",
+      "description": "显式未知清单顶层镜像（便捷视图；权威在 sections.unknowns.items）。未知项 confidence 恒 unknown。",
+      "items": { "$ref": "#/$defs/unknown_item" },
+      "examples": [
+        [
+          {
+            "unknown_id": "U-001",
+            "kind": "data_quality",
+            "description": "时间漂移的物理原因未知（温度/供电/批次均未记录）",
+            "resolution_method": "采集带环境元信息的新数据后重算",
+            "confidence": "unknown",
+            "evidence_refs": ["ev-001"]
+          }
+        ]
+      ]
+    },
+
+    "confidence": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "报告整体证据等级（取最弱级）。硬规则：数据质量门控未通过 ⇒ 必须 unknown；nonstationarity_detected=true 或 time_confounding=material ⇒ 不得为 observation（跨行比较结论受污染）。",
+      "examples": ["hypothesis"]
+    },
+
+    "notes": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "备注（口径取舍、与既有报告差异、下一步）。",
+      "examples": ["本报告统一了 docs/analysis 下分散报告的结论口径"]
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "不变量 A（schema 级）：有 findings/contradictions ⇒ evidence_chain.links 不得为空（无证据不得出结论）。",
+      "if": {
+        "anyOf": [
+          { "properties": { "findings": { "minItems": 1 } }, "required": ["findings"] },
+          { "properties": { "contradictions": { "minItems": 1 } }, "required": ["contradictions"] }
+        ]
+      },
+      "then": {
+        "properties": {
+          "sections": {
+            "properties": { "evidence_chain": { "properties": { "links": { "minItems": 1 } } } }
+          }
+        }
+      }
+    },
+    {
+      "description": "不变量 B（schema 级）：数据质量门控未通过 ⇒ 报告整体等级必须 unknown。",
+      "if": {
+        "properties": {
+          "sections": {
+            "properties": {
+              "quality_and_stationarity": {
+                "properties": { "gate_passed": { "const": false } },
+                "required": ["gate_passed"]
+              }
+            },
+            "required": ["quality_and_stationarity"]
+          }
+        },
+        "required": ["sections"]
+      },
+      "then": { "properties": { "confidence": { "const": "unknown" } } }
+    }
+  ],
+
+  "$defs": {
+    "quality_section": {
+      "type": "object",
+      "description": "第 1 块：数据质量与非平稳性（强制前置）。门控失败时其余各块结论不可用于机制判断。",
+      "required": ["gate_passed", "gate_failures", "n_rows", "labels", "nonstationarity_detected", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "gate_passed": {
+          "type": "boolean",
+          "description": "数据质量门控是否通过（false ⇒ 整体 confidence 必须 unknown）。",
+          "examples": [true, false]
+        },
+        "gate_failures": {
+          "type": "array",
+          "description": "门控失败原因（空数组=全通过）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["数据非平稳（见 nonstationary_labels）"], []]
+        },
+        "n_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "参与分析的记录数。",
+          "examples": [740209]
+        },
+        "skipped_rows": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "被跳过行数（解析失败/字段缺失）。",
+          "examples": [0, "unknown"]
+        },
+        "labels": {
+          "type": "array",
+          "description": "出现过的状态标签（频次降序，原样字面量）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["FL", "HANG", "SUCCESS", "UNEXPECTED", "Fake_Success"]]
+        },
+        "label_counts": {
+          "type": "object",
+          "description": "标签频次（键为原始标签字面量）。",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "examples": [{ "FL": 646289, "HANG": 86464 }]
+        },
+        "nonstationarity_detected": {
+          "type": "boolean",
+          "description": "是否检出非平稳（**UI 据此显示『数据非平稳』警示条**；判定规则见 stationarity_threshold / stationarity_rules）。",
+          "examples": [true, false]
+        },
+        "nonstationary_labels": {
+          "type": "array",
+          "description": "被判非平稳的标签及漂移证据（空数组=未检出）。",
+          "items": { "$ref": "#/$defs/nonstationary_label" },
+          "examples": [
+            [
+              {
+                "label": "FL",
+                "overdispersion_ratio": 190.05,
+                "rate_first_segment": 0.9234,
+                "rate_last_segment": 0.83588,
+                "total_change": -0.08752,
+                "trend_pearson_r": -0.987,
+                "confidence": "observation",
+                "evidence_refs": ["ev-001"]
+              }
+            ]
+          ]
+        },
+        "stationarity_threshold": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "过散比判定阈值（常数=统计规则，非数据集值）。",
+          "examples": [10.0, "unknown"]
+        },
+        "stationarity_verdict": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "平稳性判定的人读结论（机读请用 nonstationarity_detected）。",
+          "examples": ["数据非平稳：2/5 标签同时满足 χ² 齐性 p<α/K 与效应量足够"]
+        },
+        "time_axis_assumption": {
+          "$ref": "#/$defs/assumption",
+          "description": "时间轴假设（行序=采集时序？无时间戳列时为 hypothesis）。所有漂移结论都以该假设为前提。",
+          "examples": [
+            {
+              "claim": "记录行序 = 采集时序",
+              "confidence": "hypothesis",
+              "basis": "数据源无时间戳列，行序是唯一可用的时序代理",
+              "evidence_refs": []
+            }
+          ]
+        },
+        "post_gate_policy": {
+          "type": "string",
+          "enum": ["direct", "detrend_required", "unknown"],
+          "description": "门控后处理策略：direct=可直接按同分布比较；detrend_required=跨行比较必须先去趋势（未去趋势对比不得作机制证据）；unknown=未判定。",
+          "examples": ["detrend_required"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本块结论证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "gate_passed": true,
+          "gate_failures": ["数据非平稳（见 nonstationary_labels）"],
+          "n_rows": 740209,
+          "skipped_rows": 0,
+          "labels": ["FL", "HANG", "SUCCESS"],
+          "label_counts": { "FL": 646289, "HANG": 86464, "SUCCESS": 4616 },
+          "nonstationarity_detected": true,
+          "nonstationary_labels": [],
+          "stationarity_threshold": 10.0,
+          "stationarity_verdict": "数据非平稳（示例）",
+          "time_axis_assumption": {
+            "claim": "记录行序 = 采集时序",
+            "confidence": "hypothesis",
+            "basis": "无时间戳列",
+            "evidence_refs": []
+          },
+          "post_gate_policy": "detrend_required",
+          "confidence": "observation",
+          "evidence_refs": ["ev-001"]
+        }
+      ]
+    },
+
+    "nonstationary_label": {
+      "type": "object",
+      "description": "单标签的非平稳证据（漂移幅度 + 过散比）。",
+      "required": ["label", "overdispersion_ratio", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "状态标签（原始字面量）。",
+          "examples": ["FL"]
+        },
+        "overdispersion_ratio": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "过散比 = 段间率方差 / 二项噪声方差（≈1 平稳，≫1 非平稳）。**UI『数据非平稳』警示条的核心数值**。",
+          "examples": [190.05, "unknown"]
+        },
+        "rate_first_segment": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "首段时间分段的该标签率。",
+          "examples": [0.9234, "unknown"]
+        },
+        "rate_last_segment": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "末段时间分段的该标签率。",
+          "examples": [0.83588, "unknown"]
+        },
+        "total_change": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "首末段率变化（末-首；负值=下降）。",
+          "examples": [-0.08752, "unknown"]
+        },
+        "trend_pearson_r": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "分段率与段序号的 Pearson 相关（|r|≈1 = 单调漂移）。",
+          "examples": [-0.987, "unknown"]
+        },
+        "homogeneity_p": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "分段率齐性检验 p 值（χ² 近似）。",
+          "examples": [0.0, "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该非平稳结论的证据等级（数据直接算出=observation；若时间轴假设未证实则降 hypothesis）。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "label": "FL",
+          "overdispersion_ratio": 190.05,
+          "rate_first_segment": 0.9234,
+          "rate_last_segment": 0.83588,
+          "total_change": -0.08752,
+          "trend_pearson_r": -0.987,
+          "homogeneity_p": 0.0,
+          "confidence": "observation",
+          "evidence_refs": ["ev-001"]
+        }
+      ]
+    },
+
+    "command_section": {
+      "type": "object",
+      "description": "第 2 块：命令面归因（响应码频次/码族/码↔阶段映射/参数轴结构与逐点显著性）。无结构化记录时 available=false。",
+      "required": ["available", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "本块是否可分析（false ⇒ reason 必填）。",
+          "examples": [true, false]
+        },
+        "reason": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "不可用原因。",
+          "examples": ["数据源无结构化记录（可能只含字节流/文本）", "unknown"]
+        },
+        "background_state": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "背景状态标签（行数最多者，作为条件构成基线）。",
+          "examples": ["FL", "unknown"]
+        },
+        "main_pulse": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "主扫描的 pulse 轴取值（可推导或配置）。",
+          "examples": [2, "unknown"]
+        },
+        "code_taxonomy": {
+          "type": "array",
+          "description": "响应码/无响应类频次表（码键按数据原样）。",
+          "items": { "$ref": "#/$defs/code_entry" },
+          "examples": [
+            [
+              {
+                "code": "0x<CODE_A>",
+                "count": 646289,
+                "rate": 0.8731,
+                "wilson95": "unknown",
+                "confidence": "observation",
+                "evidence_refs": ["ev-002"]
+              }
+            ]
+          ]
+        },
+        "code_families": {
+          "type": "array",
+          "description": "码族汇总（族划分来自 ROM 侧逆向，经 config 显式传入；无划分时省略）。",
+          "items": { "$ref": "#/$defs/code_family" },
+          "examples": [
+            [
+              {
+                "family": "A_length_misalign",
+                "codes": ["0x<CODE_A>"],
+                "count": 646289,
+                "rate": 0.8731,
+                "confidence": "hypothesis",
+                "evidence_refs": ["ev-003"]
+              }
+            ]
+          ]
+        },
+        "code_phase_map": {
+          "type": "array",
+          "description": "响应码 ↔ 功能阶段映射（阶段语义通常 hypothesis；码↔handler 地址可由 ROM 静态指令支撑 observation）。",
+          "items": { "$ref": "#/$defs/code_phase" },
+          "examples": [
+            [
+              {
+                "code": "0x<CODE_A>",
+                "phase": "write_length_check",
+                "handler_addr": 553648542,
+                "handler_note": "andi + c.beqz 邻近装载点",
+                "observed_in_data": true,
+                "observed_count": 646289,
+                "phase_confidence": "hypothesis",
+                "code_confidence": "observation",
+                "confidence": "hypothesis",
+                "evidence_refs": ["ev-003"]
+              }
+            ]
+          ]
+        },
+        "axis_structure": {
+          "$ref": "#/$defs/axis_structure",
+          "description": "参数轴上是否存在功能阶段结构（条件构成齐性检验）。",
+          "examples": [
+            {
+              "axis": "delay",
+              "homogeneous": true,
+              "test": "chi2",
+              "statistic": 160.8,
+              "dof": 54,
+              "p_value": 2.58e-12,
+              "confidence": "observation",
+              "evidence_refs": ["ev-004"]
+            }
+          ]
+        },
+        "detrended_axis_profiles": {
+          "type": "array",
+          "description": "扣除时间轴后的参数轴效应（原始 ρ vs 去趋势 ρ）。",
+          "items": { "$ref": "#/$defs/detrended_profile" },
+          "examples": [
+            [
+              {
+                "axis": "delay",
+                "label": "FL",
+                "raw_spearman": 0.56,
+                "detrended_spearman": 0.577,
+                "time_confounding": "none",
+                "true_effect_std": "unknown",
+                "confidence": "observation",
+                "evidence_refs": ["ev-004"]
+              }
+            ]
+          ]
+        },
+        "pointwise_significance": {
+          "type": "array",
+          "description": "逐点率 vs 合并率显著性（FDR 校正 + 小计数保护）。",
+          "items": { "$ref": "#/$defs/pointwise_significance" },
+          "examples": [
+            [
+              {
+                "label": "SUCCESS",
+                "pooled_rate": 0.00623,
+                "n_points": 61,
+                "n_significant": 0,
+                "fdr_q": 0.05,
+                "fdr_method": "Benjamini–Hochberg",
+                "n_points_low_count": 0,
+                "low_count_warning": "unknown",
+                "confidence": "observation",
+                "evidence_refs": ["ev-004"]
+              }
+            ]
+          ]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本块综合证据等级（取各结论最弱级）。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "available": true,
+          "reason": "unknown",
+          "background_state": "FL",
+          "main_pulse": 2,
+          "code_taxonomy": [],
+          "code_families": [],
+          "code_phase_map": [],
+          "axis_structure": "unknown",
+          "detrended_axis_profiles": [],
+          "pointwise_significance": [],
+          "confidence": "observation",
+          "evidence_refs": ["ev-002"]
+        }
+      ]
+    },
+
+    "code_entry": {
+      "type": "object",
+      "description": "单个响应码的频次条目。",
+      "required": ["code", "count", "rate", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "响应码键（数据原样：十六进制字面量或哨兵 token）。",
+          "examples": ["0x<CODE_A>", "OK"]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "出现行数。",
+          "examples": [646289]
+        },
+        "rate": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "占比（count / n_rows）。",
+          "examples": [0.8731, "unknown"]
+        },
+        "wilson95": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "占比的 Wilson 95% 区间 {low, high}；未计算写 unknown。",
+          "examples": [{ "low": 0.8721, "high": 0.8741 }, "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "频次事实的证据等级（直接计数=observation）。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "code": "0x<CODE_A>",
+          "count": 646289,
+          "rate": 0.8731,
+          "wilson95": "unknown",
+          "confidence": "observation",
+          "evidence_refs": ["ev-002"]
+        }
+      ]
+    },
+
+    "code_family": {
+      "type": "object",
+      "description": "码族汇总（族划分与命名来自 ROM 侧逆向，属假设）。",
+      "required": ["family", "codes", "count", "rate", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "type": "string",
+          "minLength": 1,
+          "description": "码族名（语义名来自逆向 → hypothesis）。",
+          "examples": ["A_length_misalign"]
+        },
+        "codes": {
+          "type": "array",
+          "description": "该族的码键清单。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["0x<CODE_A>"]]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "该族总行数。",
+          "examples": [646289]
+        },
+        "rate": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "该族占比。",
+          "examples": [0.8731, "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "族归属证据等级（族名/划分为逆向假设 → hypothesis；仅频次为 observation）。",
+          "examples": ["hypothesis"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "family": "A_length_misalign",
+          "codes": ["0x<CODE_A>"],
+          "count": 646289,
+          "rate": 0.8731,
+          "confidence": "hypothesis",
+          "evidence_refs": ["ev-003"]
+        }
+      ]
+    },
+
+    "code_phase": {
+      "type": "object",
+      "description": "响应码 ↔ 功能阶段映射条目（阶段语义与 handler 地址可各自定级）。",
+      "required": ["code", "observed_in_data", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "响应码键。",
+          "examples": ["0x<CODE_A>"]
+        },
+        "phase": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "功能阶段名（阶段划分与命名属逆向结论）。",
+          "examples": ["write_length_check", "unknown"]
+        },
+        "handler_addr": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "ROM 侧装载点/比对点地址（uint）；未定位写 unknown。",
+          "examples": [553648542, "unknown"]
+        },
+        "handler_note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "handler 位置说明（邻近指令/分支形态）。",
+          "examples": ["cmd 0x50: andi a5,s1,7 + c.beqz"]
+        },
+        "observed_in_data": {
+          "type": "boolean",
+          "description": "该码在本次数据中是否有观测（false=零观测，为重要负面事实）。",
+          "examples": [true, false]
+        },
+        "observed_count": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "该码出现行数。",
+          "examples": [646289, 0]
+        },
+        "phase_confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "阶段语义证据等级（通常 hypothesis）。",
+          "examples": ["hypothesis"]
+        },
+        "code_confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "码↔handler 地址对应关系的证据等级（ROM 静态指令可支撑 observation）。",
+          "examples": ["observation"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本条目综合等级（取两者最弱级）。",
+          "examples": ["hypothesis"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "code": "0x<CODE_A>",
+          "phase": "write_length_check",
+          "handler_addr": 553648542,
+          "handler_note": "andi + c.beqz 邻近装载点",
+          "observed_in_data": true,
+          "observed_count": 646289,
+          "phase_confidence": "hypothesis",
+          "code_confidence": "observation",
+          "confidence": "hypothesis",
+          "evidence_refs": ["ev-003"]
+        }
+      ]
+    },
+
+    "axis_structure": {
+      "type": "object",
+      "description": "参数轴上是否存在功能阶段结构（条件构成齐性检验结果）。",
+      "required": ["axis", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "axis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "参数轴名。",
+          "examples": ["delay"]
+        },
+        "homogeneous": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "各码构成是否齐性（true=齐性无阶段结构；false=异质存在阶段边界）。",
+          "examples": [true, false, "unknown"]
+        },
+        "test": {
+          "type": "string",
+          "enum": ["chi2", "none", "unknown"],
+          "description": "检验方法。",
+          "examples": ["chi2", "unknown"]
+        },
+        "statistic": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "检验统计量。",
+          "examples": [160.8, "unknown"]
+        },
+        "dof": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "自由度。",
+          "examples": [54, "unknown"]
+        },
+        "p_value": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "p 值。",
+          "examples": [2.58e-12, "unknown"]
+        },
+        "multiple_comparison_note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "多重比较提示（逐个检验时未校正会导致假阳性；应写明 Bonferroni/FDR 阈值与结论）。",
+          "examples": ["13 个码同时检验的 Bonferroni 阈值=0.0038，无一存活"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该判定证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "axis": "delay",
+          "homogeneous": true,
+          "test": "chi2",
+          "statistic": 160.8,
+          "dof": 54,
+          "p_value": 2.58e-12,
+          "multiple_comparison_note": "Bonferroni 阈值下无一存活",
+          "confidence": "observation",
+          "evidence_refs": ["ev-004"]
+        }
+      ]
+    },
+
+    "detrended_profile": {
+      "type": "object",
+      "description": "扣除时间轴后的参数轴效应（原始 ρ vs 去趋势 ρ）。",
+      "required": ["axis", "label", "raw_spearman", "detrended_spearman", "time_confounding", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "axis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "参数轴名。",
+          "examples": ["delay"]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "状态标签。",
+          "examples": ["FL"]
+        },
+        "raw_spearman": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "原始 Spearman ρ（未扣时间）。",
+          "examples": [0.56, "unknown"]
+        },
+        "detrended_spearman": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "扣除时间轴后的 Spearman ρ（真实参数效应）。",
+          "examples": [0.577, "unknown"]
+        },
+        "time_confounding": {
+          "type": "string",
+          "enum": ["none", "material", "unknown"],
+          "description": "时间混杂程度：none=去趋势前后几乎不变；material=变化显著（**UI 需显示『时间混杂严重』警示**）。",
+          "examples": ["none", "material"]
+        },
+        "true_effect_std": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "真实效应标准差（扣二项噪声后的参数轴波动）。",
+          "examples": [0.0031, "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该去趋势结论证据等级（依赖时间轴假设，通常 hypothesis）。",
+          "examples": ["hypothesis", "observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "axis": "delay",
+          "label": "FL",
+          "raw_spearman": 0.56,
+          "detrended_spearman": 0.577,
+          "time_confounding": "none",
+          "true_effect_std": "unknown",
+          "confidence": "observation",
+          "evidence_refs": ["ev-004"]
+        }
+      ]
+    },
+
+    "pointwise_significance": {
+      "type": "object",
+      "description": "逐点显著性汇总（回答『扫描范围内是否存在真的不同的参数点』）。",
+      "required": ["label", "n_points", "n_significant", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "状态标签。",
+          "examples": ["SUCCESS"]
+        },
+        "pooled_rate": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "全窗口合并率（零假设基线率）。",
+          "examples": [0.00623, "unknown"]
+        },
+        "n_points": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "检验的参数点数。",
+          "examples": [61]
+        },
+        "n_significant": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "FDR 校正后显著点数（0=该轴无特别好/特别差的点）。",
+          "examples": [0]
+        },
+        "fdr_q": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "FDR 目标水平 q。",
+          "examples": [0.05, "unknown"]
+        },
+        "fdr_method": {
+          "type": "string",
+          "enum": ["Benjamini–Hochberg", "Bonferroni", "none", "unknown"],
+          "description": "多重比较校正方法。",
+          "examples": ["Benjamini–Hochberg", "unknown"]
+        },
+        "n_points_low_count": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "期望计数过低（正态近似失效）的点数。",
+          "examples": [3, "unknown"]
+        },
+        "low_count_warning": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "小计数警示文本（稀疏标签的 FDR 结论不可按字面读）；无警示写 unknown。",
+          "examples": ["3/61 点期望事件数 <5，已改精确泊松 p 值", "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该显著性结论证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "label": "SUCCESS",
+          "pooled_rate": 0.00623,
+          "n_points": 61,
+          "n_significant": 0,
+          "fdr_q": 0.05,
+          "fdr_method": "Benjamini–Hochberg",
+          "n_points_low_count": 0,
+          "low_count_warning": "unknown",
+          "confidence": "observation",
+          "evidence_refs": ["ev-004"]
+        }
+      ]
+    },
+
+    "frame_section": {
+      "type": "object",
+      "description": "第 3 块：帧格式解析（仅当数据含字节流时可用）。含字节流重建标注。",
+      "required": ["available", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "本块是否可分析（数据无字节流时 false）。",
+          "examples": [true, false]
+        },
+        "reason": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "不可用原因（available=false 时必填）。",
+          "examples": ["输入数据不含字节流（CSV/JSONL 无原始字节通道）", "unknown"]
+        },
+        "byte_stream": {
+          "type": "object",
+          "description": "字节流来源与**重建标注**（UI 必须显示『字节流重建』：这些字节可能由多条记录拼接，非一次性连续采集）。",
+          "required": ["path", "hex", "total_bytes", "reconstruction"],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "字节来源数据文件。",
+              "examples": ["examples/rom-simulation/runs/2026-11-09/<label>/trace.jsonl"]
+            },
+            "addr_range": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": { "type": "integer", "minimum": 0 },
+              "description": "取址区间 [起始地址, 长度]；不适用时省略。",
+              "examples": [[536870912, 4]]
+            },
+            "hex": {
+              "type": "string",
+              "pattern": "^([0-9a-fA-F]{2})*$",
+              "description": "字节流十六进制（偶数长度）。",
+              "examples": ["464c0105"]
+            },
+            "total_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "字节流长度。",
+              "examples": [4]
+            },
+            "reconstruction": {
+              "type": "string",
+              "enum": ["verbatim", "partial", "reconstructed", "unknown"],
+              "description": "字节获取方式：verbatim=原样一次采集；partial=部分连续；reconstructed=由多条记录/快照重建（**UI 必须标注**）；unknown=不可判定。",
+              "examples": ["reconstructed", "verbatim"]
+            },
+            "reconstruction_note": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "重建方式说明（哪些字节来自哪条记录）。",
+              "examples": ["由 3 次 UART 写事件按序拼接"]
+            }
+          },
+          "examples": [
+            {
+              "path": "examples/rom-simulation/runs/2026-11-09/<label>/trace.jsonl",
+              "addr_range": [536870912, 4],
+              "hex": "464c0105",
+              "total_bytes": 4,
+              "reconstruction": "reconstructed",
+              "reconstruction_note": "由多次 UART 写事件拼接"
+            }
+          ]
+        },
+        "frame_len": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "采用帧长（字节）。",
+          "examples": [4, "unknown"]
+        },
+        "frame_len_derived": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "帧长是否推导值（true=推导需标注）。",
+          "examples": [true, "unknown"]
+        },
+        "field_layout": {
+          "type": "array",
+          "description": "字段布局窗口（候选字段及其字节解读）。",
+          "items": { "$ref": "#/$defs/field_window" },
+          "examples": [
+            [
+              {
+                "start": 0,
+                "bytes_hex": "464c",
+                "interpretation": "magic 'FL'",
+                "confidence": "hypothesis",
+                "evidence_refs": ["ev-005"]
+              }
+            ]
+          ]
+        },
+        "rom_three_way_comparison": {
+          "type": "array",
+          "description": "字节流实际值 vs ROM 静态构造式 vs 布局假设的三方比对（定位『哪一方不成立』）。",
+          "items": { "$ref": "#/$defs/three_way_item" },
+          "examples": [
+            [
+              {
+                "site": "error_frame_sender",
+                "role": "frame_value",
+                "symbolic_expr": "(a5 & 0xFFC0) | (a0 & 0x3F)",
+                "constant_bits_match": true,
+                "solved_variables": "unknown",
+                "confidence": "observation",
+                "evidence_refs": ["ev-006"]
+              }
+            ]
+          ]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本块证据等级（无字节流且无结论时 unknown）。",
+          "examples": ["observation", "unknown"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "available": false,
+          "reason": "输入数据不含字节流（CSV/JSONL 无原始字节通道）",
+          "byte_stream": "unknown",
+          "frame_len": "unknown",
+          "frame_len_derived": "unknown",
+          "field_layout": [],
+          "rom_three_way_comparison": [],
+          "confidence": "unknown",
+          "evidence_refs": []
+        }
+      ]
+    },
+
+    "field_window": {
+      "type": "object",
+      "description": "字段布局窗口（候选字段的字节位置与解读）。",
+      "required": ["start", "bytes_hex", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "字段起始字节偏移（相对 payload 起点）。",
+          "examples": [0]
+        },
+        "bytes_hex": {
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{2})+$",
+          "description": "该窗口字节（hex）。",
+          "examples": ["464c"]
+        },
+        "interpretation": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "字段解读（magic/长度/状态码/…）；未定写 unknown。",
+          "examples": ["magic 'FL'", "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该解读证据等级（字段语义推断通常 hypothesis）。",
+          "examples": ["hypothesis"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "start": 0,
+          "bytes_hex": "464c",
+          "interpretation": "magic 'FL'",
+          "confidence": "hypothesis",
+          "evidence_refs": ["ev-005"]
+        }
+      ]
+    },
+
+    "three_way_item": {
+      "type": "object",
+      "description": "三方比对条目（字节流实际值 / ROM 构造式 / 布局假设）。",
+      "required": ["site", "role", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ROM 侧站点名。",
+          "examples": ["error_frame_sender"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["frame_value", "code_field", "length_field", "unknown"],
+          "description": "站点在帧构造中的角色。",
+          "examples": ["frame_value", "unknown"]
+        },
+        "symbolic_expr": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "ROM 构造式的符号化表达（常量位+未知变量）。",
+          "examples": ["(a5 & 0xFFC0) | (a0 & 0x3F)", "unknown"]
+        },
+        "constant_bits_match": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "ROM 常量位与实际字节是否一致（false=该站点不是本次帧构造点或取址错误）。",
+          "examples": [true, false, "unknown"]
+        },
+        "solved_variables": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "从实际字节反解的变量值；未反解写 unknown。",
+          "examples": [{ "code": "0x<CODE_A>" }, "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该比对结论证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "site": "error_frame_sender",
+          "role": "frame_value",
+          "symbolic_expr": "(a5 & 0xFFC0) | (a0 & 0x3F)",
+          "constant_bits_match": true,
+          "solved_variables": "unknown",
+          "confidence": "observation",
+          "evidence_refs": ["ev-006"]
+        }
+      ]
+    },
+
+    "power_section": {
+      "type": "object",
+      "description": "第 4 块：统计功效与可检测性声明。核心价值：区分『没有窗口』与『设计看不见窗口』。",
+      "required": ["available", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "本块是否可计算（无逐点重复数时 false）。",
+          "examples": [true, false]
+        },
+        "reason": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "不可用原因。",
+          "examples": ["无主扫描逐点数据", "unknown"]
+        },
+        "n_points": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "参数点数。",
+          "examples": [61, "unknown"]
+        },
+        "mean_repeats_per_point": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "每点平均重复数 n（MDE 的直接决定因素）。",
+          "examples": [12134, "unknown"]
+        },
+        "per_label": {
+          "type": "array",
+          "description": "各标签的 MDE 与可检测性判定。",
+          "items": { "$ref": "#/$defs/power_entry" },
+          "examples": [
+            [
+              {
+                "label": "SUCCESS",
+                "baseline_rate": 0.00623,
+                "n_per_point": 12134,
+                "mde_abs": 0.00846,
+                "mde_relative_to_baseline": 1.358,
+                "detectability": "no_structure_at_this_resolution",
+                "confidence": "observation",
+                "evidence_refs": ["ev-007"]
+              }
+            ]
+          ]
+        },
+        "interpretation": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "整体解读（MDE 含义与使用方式）。",
+          "examples": ["MDE=该重复数下（双侧 5%/80%）可检测的最小绝对率差"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本块证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "available": true,
+          "reason": "unknown",
+          "n_points": 61,
+          "mean_repeats_per_point": 12134,
+          "per_label": [],
+          "interpretation": "MDE 表示当前设计能看见的最小率差",
+          "confidence": "observation",
+          "evidence_refs": ["ev-007"]
+        }
+      ]
+    },
+
+    "power_entry": {
+      "type": "object",
+      "description": "单标签统计功效条目。",
+      "required": ["label", "n_per_point", "mde_abs", "detectability", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "状态标签。",
+          "examples": ["SUCCESS"]
+        },
+        "baseline_rate": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "零假设基线率 p0。",
+          "examples": [0.00623, "unknown"]
+        },
+        "n_per_point": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "每点重复数 n。",
+          "examples": [12134, "unknown"]
+        },
+        "mde_abs": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "最小可检测绝对率差（双侧 α=0.05、power=80%）。**UI 必须显示**：它定义『设计看不见的窗口』边界。",
+          "examples": [0.00846, "unknown"]
+        },
+        "mde_relative_to_baseline": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "MDE 相对基线率的比例（mde_abs / p0）。",
+          "examples": [1.358, "unknown"]
+        },
+        "n_points": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "该标签检验的参数点数。",
+          "examples": [61, "unknown"]
+        },
+        "fdr_significant_points": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "FDR 校正后显著点数。",
+          "examples": [0, "unknown"]
+        },
+        "n_points_low_count": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "期望计数过低的点数。",
+          "examples": [0, "unknown"]
+        },
+        "detectability": {
+          "type": "string",
+          "enum": [
+            "window_detected",
+            "no_structure_at_this_resolution",
+            "low_count_unreliable",
+            "unknown"
+          ],
+          "description": "可检测性判定：window_detected=有显著点；no_structure_at_this_resolution=**未见显著点但只对 ≥MDE 的效应敏感（『未知』而非『不存在』）**；low_count_unreliable=期望计数过低结论不可用；unknown=未判定。",
+          "examples": ["no_structure_at_this_resolution"]
+        },
+        "detectability_note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "判定说明（人读）。",
+          "examples": ["0 点通过 FDR；本设计只能看见相对基线 135.8% 以上的率差"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该功效结论证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "label": "SUCCESS",
+          "baseline_rate": 0.00623,
+          "n_per_point": 12134,
+          "mde_abs": 0.00846,
+          "mde_relative_to_baseline": 1.358,
+          "n_points": 61,
+          "fdr_significant_points": 0,
+          "n_points_low_count": 0,
+          "detectability": "no_structure_at_this_resolution",
+          "detectability_note": "0 点通过 FDR；只能看见 ≥MDE 的率差",
+          "confidence": "observation",
+          "evidence_refs": ["ev-007"]
+        }
+      ]
+    },
+
+    "statistical_caveats": {
+      "type": "object",
+      "description": "**必填统计警示四项**——『数据非平稳』与『设计看不见窗口』两类误判的主要来源，UI 必须能逐项显示（无警示时也必须显式存在，表示『已检查且无警示』）。",
+      "required": [
+        "overdispersion_ratio",
+        "mde_abs",
+        "low_count_warning",
+        "time_confounding"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "overdispersion_ratio": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "最强过散比（跨标签取最大；≈1 平稳，≫1 非平稳）。**UI：超阈值时显示『数据非平稳』警示条**。",
+          "examples": [190.05, "unknown"]
+        },
+        "mde_abs": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "最相关的 MDE（绝对率差）。**UI：显示『设计看不见小于该值的窗口』**。",
+          "examples": [0.00846, "unknown"]
+        },
+        "low_count_warning": {
+          "type": "boolean",
+          "description": "是否存在小计数不可靠项（期望计数 <5）。**UI：true 时显示『稀疏标签统计不可靠』**。",
+          "examples": [true, false]
+        },
+        "time_confounding": {
+          "type": "string",
+          "enum": ["none", "material", "unknown"],
+          "description": "时间混杂严重程度（任一标签去趋势前后 ρ 变化显著即 material）。**UI：material 时显示『效应受时间漂移污染』**。",
+          "examples": ["none", "material", "unknown"]
+        },
+        "caveat_notes": {
+          "type": "array",
+          "description": "补充警示文本（人读完整说明）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["数据非平稳：跨行比较必须先扣除时间轴"]]
+        }
+      },
+      "examples": [
+        {
+          "overdispersion_ratio": 190.05,
+          "mde_abs": 0.00846,
+          "low_count_warning": true,
+          "time_confounding": "none",
+          "caveat_notes": ["数据非平稳，跨行比较已去趋势"]
+        }
+      ]
+    },
+
+    "unknowns_section": {
+      "type": "object",
+      "description": "第 5 块：待验证矛盾点/未决项（unknowns）。每条必须给判决方法；confidence 恒 unknown。",
+      "required": ["n_items", "items", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "n_items": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "未决项条数。",
+          "examples": [3]
+        },
+        "items": {
+          "type": "array",
+          "description": "未决项列表。",
+          "items": { "$ref": "#/$defs/unknown_item" },
+          "examples": [
+            [
+              {
+                "unknown_id": "U-001",
+                "kind": "data_quality",
+                "description": "时间漂移的物理原因未知",
+                "resolution_method": "采集带环境元信息的新数据",
+                "confidence": "unknown",
+                "evidence_refs": ["ev-001"]
+              }
+            ]
+          ]
+        },
+        "discipline": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "该块的纪律声明（人读）。",
+          "examples": ["只登记证据不足以判定的项，每条给 resolve_by"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "unknown",
+          "description": "本块整体等级恒 unknown（未决项不得包装成结论）。",
+          "examples": ["unknown"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "n_items": 1,
+          "items": [],
+          "discipline": "只登记证据不足以判定的项",
+          "confidence": "unknown",
+          "evidence_refs": []
+        }
+      ]
+    },
+
+    "evidence_section": {
+      "type": "object",
+      "description": "第 6 块：证据链（每个结论 → 数据行范围 / ROM 地址区间 / 仿真运行件）。links[].id 供 findings/contradictions/各 section 的 evidence_refs 引用。",
+      "required": ["n_links", "links", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "n_links": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "证据链条数。",
+          "examples": [6]
+        },
+        "links": {
+          "type": "array",
+          "description": "证据链条目清单。",
+          "items": { "$ref": "#/$defs/evidence_item" },
+          "examples": [
+            [
+              {
+                "id": "ev-001",
+                "conclusion_id": "nonstationarity",
+                "kind": "data_rows",
+                "locator": "data/derived/<DATASET>.typed.jsonl",
+                "row_range": [0, 740208],
+                "confidence": "observation"
+              }
+            ]
+          ]
+        },
+        "discipline": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "该块纪律声明（人读）。",
+          "examples": ["每条结论必须可回溯到具体数据文件/行范围、ROM 地址区间或仿真运行件"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "证据链本身的可靠度等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "n_links": 1,
+          "links": [],
+          "discipline": "每条结论可回溯到数据行范围/ROM 地址区间/仿真运行件",
+          "confidence": "observation",
+          "evidence_refs": []
+        }
+      ]
+    },
+
+    "evidence_item": {
+      "type": "object",
+      "description": "证据链条目：必须可回溯到数据行范围 / ROM 地址区间 / 仿真运行件。",
+      "required": ["id", "kind", "locator", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "证据稳定 ID（形如 ev-001）。",
+          "examples": ["ev-001"]
+        },
+        "conclusion_id": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "所支撑的结论标识（与 findings/contradictions 关联；未关联写 unknown）。",
+          "examples": ["nonstationarity", "unknown"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "data_rows",
+            "data_column",
+            "rom_range",
+            "sim_trace",
+            "byte_stream",
+            "config",
+            "prior_report",
+            "computation",
+            "unknown"
+          ],
+          "description": "证据种类：data_rows=数据行范围；rom_range=ROM 地址区间；sim_trace=仿真运行件；byte_stream=字节流；config=配置输入；prior_report=既有报告；computation=可重放纯计算；unknown=不可判定。",
+          "examples": ["data_rows", "rom_range"]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "description": "证据定位（文件路径 / ROM 偏移+地址 / 运行 ID / 计算函数名）。",
+          "examples": ["data/derived/<DATASET>.typed.jsonl", "rom+0x3FAA @0x<ADDR>"]
+        },
+        "row_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "数据行范围 [起始行, 结束行]（0 起、含端点）；非数据行类省略。",
+          "examples": [[0, 740208]]
+        },
+        "addr": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "ROM/内存地址（uint）。",
+          "examples": [553648042, "unknown"]
+        },
+        "offset": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "镜像内偏移（hex 字面量保留原样）。",
+          "examples": ["0x3FAA", "unknown"]
+        },
+        "sha256": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "证据载体指纹（SHA-256）；不适用写 unknown。",
+          "examples": ["unknown"]
+        },
+        "detail": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "证据内容摘要。",
+          "examples": ["全量行序分段率统计（20 段）"]
+        },
+        "verification": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "可重放验证入口（命令/计算函数）。",
+          "examples": ["fi.analysis.stratify.time_drift_summary(n_segments=20)"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该证据本身可靠度等级。注意：kind=computation/prior_report 属推导/转述，不得标 observation。",
+          "examples": ["observation", "hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "id": "ev-001",
+          "conclusion_id": "nonstationarity",
+          "kind": "data_rows",
+          "locator": "data/derived/<DATASET>.typed.jsonl",
+          "row_range": [0, 740208],
+          "addr": "unknown",
+          "offset": "unknown",
+          "sha256": "unknown",
+          "detail": "全量行序分段率统计（20 段）",
+          "verification": "fi.analysis.stratify.time_drift_summary(n_segments=20)",
+          "confidence": "observation"
+        }
+      ]
+    },
+
+    "contradiction": {
+      "type": "object",
+      "description": "待验证矛盾点（现有证据互相冲突，必有其一为假；区别于『缺证据』的 unknowns）。",
+      "required": ["contradiction_id", "description", "sides", "status", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "contradiction_id": {
+          "type": "string",
+          "pattern": "^C-[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "矛盾点 ID（形如 C-001）。",
+          "examples": ["C-001"]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "矛盾内容。",
+          "examples": ["旧报告称行序随机化，但分段率检验显示强单调漂移"]
+        },
+        "sides": {
+          "type": "array",
+          "description": "对立结论（至少 2 条，各带 confidence 与 evidence_ref）。",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/contradiction_side" },
+          "examples": [
+            [
+              { "claim": "行序随机化", "confidence": "hypothesis", "evidence_ref": "ev-001" },
+              { "claim": "FL 率单调下降，过散比 190", "confidence": "observation", "evidence_ref": "ev-002" }
+            ]
+          ]
+        },
+        "resolution": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "裁定/化解说明。",
+          "examples": ["两者可同时为真：lag-1 自相关对长程漂移不敏感"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "resolved_in_favor_of", "resolved_both_valid", "requires_new_data", "unknown"],
+          "description": "矛盾状态。",
+          "examples": ["resolved_both_valid", "open"]
+        },
+        "resolved_by_evidence_ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "裁定依据的证据 id。",
+          "examples": ["ev-002", "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该矛盾结论证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "contradiction_id": "C-001",
+          "description": "旧报告称行序随机化，但分段率检验显示强单调漂移",
+          "sides": [
+            { "claim": "行序随机化", "confidence": "hypothesis", "evidence_ref": "ev-001" },
+            { "claim": "FL 率单调下降，过散比 190", "confidence": "observation", "evidence_ref": "ev-002" }
+          ],
+          "resolution": "两者可同时为真：lag-1 自相关对长程漂移不敏感",
+          "status": "resolved_both_valid",
+          "resolved_by_evidence_ref": "ev-002",
+          "confidence": "observation",
+          "evidence_refs": ["ev-001", "ev-002"]
+        }
+      ]
+    },
+
+    "contradiction_side": {
+      "type": "object",
+      "description": "矛盾的一方（结论 + 证据）。",
+      "required": ["claim", "confidence", "evidence_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "description": "该方结论。",
+          "examples": ["FL 率单调下降，过散比 190"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该方结论证据等级。",
+          "examples": ["observation"]
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "指向 sections.evidence_chain.links[].id。",
+          "examples": ["ev-002"]
+        }
+      },
+      "examples": [
+        { "claim": "FL 率单调下降", "confidence": "observation", "evidence_ref": "ev-002" }
+      ]
+    },
+
+    "finding": {
+      "type": "object",
+      "description": "一条结论（必带 confidence + evidence_refs）。",
+      "required": ["finding_id", "kind", "statement", "confidence", "evidence_refs"],
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z]-[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "结论 ID（形如 F-001；允许 P-/C- 等其他前缀以兼容既有报告编号）。",
+          "examples": ["F-001", "P-csv-1"]
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "结论类别（自由短名，如 nonstationarity / code_composition / code_phase_alignment / frame_parse / statistical_power / scan_grid）。",
+          "examples": ["nonstationarity", "code_composition"]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["blocking", "warning", "info", "unknown"],
+          "description": "对下游使用的影响级别：blocking=该结论推翻/限制其他结论（如非平稳）；warning=需注意；info=中性事实；unknown=未分级。",
+          "examples": ["blocking", "warning", "info"]
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "description": "结论陈述（自包含可核对，避免只写指标名）。",
+          "examples": ["数据强非平稳：FL 率由 92.3% 单调降至 83.6%（过散比 190）"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "结论证据等级（未验证不得标 observation）。",
+          "examples": ["observation"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" },
+        "source": {
+          "type": "string",
+          "enum": ["this_run", "prior_report", "manual", "unknown"],
+          "description": "结论来源：this_run=本次计算；prior_report=既有报告并入；manual=人工录入；unknown=未标注。",
+          "examples": ["this_run", "prior_report"]
+        }
+      },
+      "examples": [
+        {
+          "finding_id": "F-001",
+          "kind": "nonstationarity",
+          "severity": "blocking",
+          "statement": "数据强非平稳：FL 率由 92.3% 单调降至 83.6%（过散比 190）",
+          "confidence": "observation",
+          "evidence_refs": ["ev-001"],
+          "source": "this_run"
+        }
+      ]
+    },
+
+    "unknown_item": {
+      "type": "object",
+      "description": "显式未知项（证据不足以判定；每条给判决方法）。",
+      "required": ["unknown_id", "kind", "description", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "unknown_id": {
+          "type": "string",
+          "pattern": "^U-[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "未知项 ID（形如 U-001）。",
+          "examples": ["U-001"]
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "未知类别（data_quality / attribution_gap / frame_mismatch / statistical_power / 自由短名）。",
+          "examples": ["data_quality", "attribution_gap"]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "未知内容（缺什么、影响什么结论）。",
+          "examples": ["时间漂移的物理原因未知（温度/供电/批次均未记录）"]
+        },
+        "resolution_method": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "判决方法（需要什么材料/观测才能解决）。",
+          "examples": ["采集带环境元信息的新数据后重算"]
+        },
+        "affected_rows": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "受影响数据行数；不适用写 unknown。",
+          "examples": [2834, "unknown"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "unknown",
+          "description": "未知项证据等级恒 unknown（防止把未决项包装成结论）。",
+          "examples": ["unknown"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "unknown_id": "U-001",
+          "kind": "data_quality",
+          "description": "时间漂移的物理原因未知",
+          "resolution_method": "采集带环境元信息的新数据",
+          "affected_rows": "unknown",
+          "confidence": "unknown",
+          "evidence_refs": ["ev-001"]
+        }
+      ]
+    },
+
+    "assumption": {
+      "type": "object",
+      "description": "显式假设（前提 + 等级 + 依据 + 可证伪条件）。依赖该假设的结论不得强于它。",
+      "required": ["claim", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "description": "假设内容。",
+          "examples": ["记录行序 = 采集时序"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该假设证据等级（未证实只能是 hypothesis/unknown）。",
+          "examples": ["hypothesis"]
+        },
+        "basis": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "假设依据。",
+          "examples": ["数据源无时间戳列，行序是唯一可用的时序代理"]
+        },
+        "falsified_if": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "该假设被推翻的条件（可证伪性声明）。",
+          "examples": ["采集端曾打乱行序"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "claim": "记录行序 = 采集时序",
+          "confidence": "hypothesis",
+          "basis": "数据源无时间戳列",
+          "falsified_if": "采集端曾打乱行序",
+          "evidence_refs": []
+        }
+      ]
+    },
+
+    "evidence_ref_list": {
+      "type": "array",
+      "description": "证据引用列表（元素为 sections.evidence_chain.links[].id）。",
+      "items": {
+        "type": "string",
+        "pattern": "^ev-[a-z0-9][a-z0-9-]*$"
+      },
+      "examples": [["ev-001", "ev-002"], []]
+    }
+  }
+}

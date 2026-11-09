@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/analysis-result.schema.json",
+  "title": "AnalysisResult v0.1",
+  "description": "分析结论：对 ExperimentScan/CampaignRecord/FaultContext 的分类归因产出。核心纪律：候选执行路径不是已证实轨迹（candidates 一律 hypothesis 及以下）；confirmed 与 hypothesized 结论分开存放；每条 finding 必须自带 evidence_level。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "analysis_id",
+    "analysis_kind",
+    "findings",
+    "evidence_level"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "analysis_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本结论唯一 ID。",
+      "examples": ["ana-20261109-hitwin01"]
+    },
+
+    "analysis_kind": {
+      "type": "string",
+      "enum": ["distribution", "hit_window", "candidate_attribution", "baseline_diff", "other"],
+      "description": "分析类型：distribution=分布事实；hit_window=命中窗口结构；candidate_attribution=候选归因（结合仿真轨迹与芯片画像）；baseline_diff=基线-观测差异分析。",
+      "examples": ["hit_window", "candidate_attribution"]
+    },
+
+    "inputs": {
+      "type": "array",
+      "description": "分析输入引用（scan_id / campaign_id / context_id 均可）。",
+      "items": {
+        "type": "object",
+        "required": ["kind", "id"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["scan", "campaign", "context", "profile", "baseline"],
+            "description": "输入种类。",
+            "examples": ["scan", "context"]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "对应契约实例的 ID（scan_id/campaign_id/context_id/profile_id）。",
+            "examples": ["scan-20261109-win01", "target-chip"]
+          }
+        }
+      },
+      "examples": [[{ "kind": "scan", "id": "scan-20261109-win01" }]]
+    },
+
+    "findings": {
+      "type": "array",
+      "description": "结论列表；空数组=分析未产出结论（显式空，不是 unknown）。",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "kind", "description", "evidence_level"],
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {
+            "$ref": "common.defs.json#/$defs/id",
+            "description": "结论唯一 ID。",
+            "examples": ["find-20261109-001"]
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "结论类别（自由短标签，如 instruction_hit / response_shift / hang_zone）。",
+            "examples": ["instruction_hit"]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "结论描述（一句话事实，不带未经证据支撑的解释）。",
+            "examples": ["delay 3130-3190 区间内出现 SUCCESS 标签"]
+          },
+          "evidence_level": {
+            "$ref": "common.defs.json#/$defs/evidence_level",
+            "description": "本条结论的证据分级（必填）。",
+            "examples": ["observation", "hypothesis"]
+          },
+          "supporting_refs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "支撑证据的 ID/路径引用列表。",
+            "examples": [["scan-20261109-win01"]]
+          }
+        }
+      },
+      "examples": [
+        [
+          {
+            "finding_id": "find-20261109-001",
+            "kind": "hit_zone",
+            "description": "SUCCESS 集中于 delay 3130-3190、pulse=2",
+            "evidence_level": "observation",
+            "supporting_refs": ["scan-20261109-win01"]
+          }
+        ]
+      ]
+    },
+
+    "hit_windows": {
+      "type": "array",
+      "description": "命中的参数窗口结构。",
+      "items": {
+        "type": "object",
+        "required": ["axis", "min_value", "max_value", "unit", "evidence_level"],
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "type": "string",
+            "minLength": 1,
+            "description": "参数轴名。",
+            "examples": ["delay"]
+          },
+          "min_value": { "type": "number", "description": "窗口下界（含）。", "examples": [3130] },
+          "max_value": { "type": "number", "description": "窗口上界（含）。", "examples": [3190] },
+          "unit": {
+            "type": "string",
+            "enum": ["raw", "ns", "unknown"],
+            "description": "数值单位。",
+            "examples": ["raw"]
+          },
+          "state_label": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "该窗口对应的原始状态标签（语义待确认）。",
+            "examples": ["SUCCESS", "unknown"]
+          },
+          "evidence_level": {
+            "$ref": "common.defs.json#/$defs/evidence_level",
+            "description": "窗口结论证据分级（必填）。直接分布统计=observation；外推=hypothesis。",
+            "examples": ["observation"]
+          }
+        }
+      },
+      "examples": [
+        [{ "axis": "delay", "min_value": 3130, "max_value": 3190, "unit": "raw", "state_label": "SUCCESS", "evidence_level": "observation" }]
+      ]
+    },
+
+    "candidates": {
+      "type": "array",
+      "description": "候选路径/候选指令列表。纪律：没有硬件 Trace 或现场 PC 快照时，候选只是推导，evidence_level 不得高于 hypothesis；不得写成真实执行轨迹。",
+      "items": {
+        "type": "object",
+        "required": ["candidate_id", "description", "evidence_level"],
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "$ref": "common.defs.json#/$defs/id",
+            "description": "候选项唯一 ID。",
+            "examples": ["cand-20261109-001"]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "候选内容描述（如疑似被击中的指令/路径）。",
+            "examples": ["addi a0, zero, 0x501 被击中导致非预期错误码"]
+          },
+          "pc": {
+            "$ref": "common.defs.json#/$defs/uint_or_unknown",
+            "description": "候选 PC；无证据时写 unknown。",
+            "examples": ["unknown"]
+          },
+          "profile_ref": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "归因所用的 ChipProfile ID（格式归 chip-profile 专职）。",
+            "examples": ["target-chip", "unknown"]
+          },
+          "evidence_level": {
+            "$ref": "common.defs.json#/$defs/evidence_level",
+            "description": "候选证据分级（必填，上限 hypothesis）。",
+            "examples": ["hypothesis"]
+          }
+        }
+      },
+      "examples": [
+        [{ "candidate_id": "cand-20261109-001", "description": "0x<CODE_A> 加载路径被击中", "pc": "unknown", "profile_ref": "target-chip", "evidence_level": "hypothesis" }]
+      ]
+    },
+
+    "baseline_diff": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "基线-观测关联结论：confirmed（可证实差异，observation）与 hypothesized（推测差异，hypothesis）分离。整体未知写 \"unknown\"。",
+      "examples": [
+        {
+          "baseline_ref": "base-target-chip-authcheck-v1",
+          "confirmed": [],
+          "hypothesized": [
+            { "field": "a0", "baseline_value": 0, "observed_value": 1281, "evidence_level": "hypothesis" }
+          ]
+        },
+        "unknown"
+      ]
+    },
+
+    "metrics": {
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "description": "自由量化指标（如评分、覆盖率）。结构由具体分析器定义，键值自解释。",
+      "examples": [{ "success_rate": 0.00623 }, "unknown"]
+    },
+
+    "evidence_level": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "整份结论的证据分级（必填）：取全部 findings 的最低等级。",
+      "examples": ["hypothesis"]
+    },
+    "timestamp": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "分析完成时刻。",
+      "examples": ["2026-11-09T15:00:00+08:00", "unknown"]
+    }
+  }
+}

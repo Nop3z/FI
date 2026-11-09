@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/sim-trace.schema.json",
+  "title": "SimTrace v0.1（仿真轨迹 JSONL）",
+  "description": "指令级仿真轨迹 JSONL 契约（与 sim-engine 对齐定稿）。文件每行一个 JSON object，四种行类型：run_meta（必须首行，重放所需元数据，单文件自包含）/ trace（单条指令执行轨迹）/ fault_event（故障事件声明与生效报告）/ run_end（运行结束摘要）。行级证据规则：该行含仿真器猜测的『效果』（WARL 写忽略、占位读回、stub 占位设备、翻转效果）→ hypothesis；纯执行观测（真实字节+真实控制流）→ observation；一行混合时取最弱级。缺失字段显式 unknown，禁止 null/0。",
+  "oneOf": [
+    { "$ref": "#/$defs/run_meta" },
+    { "$ref": "#/$defs/trace" },
+    { "$ref": "#/$defs/fault_event" },
+    { "$ref": "#/$defs/run_end" }
+  ],
+  "$defs": {
+    "run_meta": {
+      "type": "object",
+      "required": ["type", "run_id", "image", "engine", "evidence_level"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "run_meta", "examples": ["run_meta"] },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "本次运行唯一 ID，后续各行引用。",
+          "examples": ["run-20261109-000001"]
+        },
+        "image": {
+          "type": "object",
+          "required": ["path", "sha256", "base_address"],
+          "additionalProperties": false,
+          "description": "被加载镜像的元数据（重放校验用）。",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "镜像文件路径（相对仓库根）。",
+              "examples": ["<ROM_IMAGE>"]
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$",
+              "description": "镜像 SHA-256（hex，小写）。",
+              "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "镜像字节数。",
+              "examples": [131072]
+            },
+            "base_address": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "加载基址（用户给定事实，如 0x<BASE> 用十进制 <BASE_DEC>）。",
+              "examples": [<BASE_DEC>]
+            }
+          },
+          "examples": [
+            { "path": "<ROM_IMAGE>", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "size_bytes": 131072, "base_address": <BASE_DEC> }
+          ]
+        },
+        "engine": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "description": "仿真引擎标识与版本。",
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "description": "引擎名。", "examples": ["unicorn-rv32"] },
+            "version": { "$ref": "common.defs.json#/$defs/string_or_unknown", "description": "引擎/后端版本。", "examples": ["2.0.1.post1", "unknown"] }
+          },
+          "examples": [{ "name": "unicorn-rv32", "version": "2.0.1.post1" }]
+        },
+        "profile_ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "所引用 ChipProfile ID（内存布局/CSR 配置来源；格式归 chip-profile 契约）。",
+          "examples": ["target-chip", "unknown"]
+        },
+        "memory_map": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "内存映射配置（结构由实现自定并自释，建议含区域名/起止/属性）；未配置写 unknown。",
+          "examples": [{ "regions": [{ "name": "ram", "base": 536870912, "size": 280 }] }, "unknown"]
+        },
+        "patches": {
+          "type": "array",
+          "description": "镜像补丁清单（如跳过卡点 CSR 写）；空数组=无补丁。元素形状实现自定，但必须可重放。",
+          "items": { "type": "object" },
+          "examples": [[{ "addr": 132, "orig_bytes_hex": "13051700", "patch_bytes_hex": "13050000", "reason": "CSR 0x307 WARL 卡点绕过", "evidence_level": "hypothesis" }]]
+        },
+        "fault_events": {
+          "type": "array",
+          "description": "预注册故障事件清单（形状同 fault_event 行核心字段，applied=unknown 待生效）。",
+          "items": { "$ref": "#/$defs/fault_event" },
+          "examples": [[]]
+        },
+        "evidence_level": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "元数据行证据分级（必填）：镜像事实=observation。",
+          "examples": ["observation"]
+        }
+      }
+    },
+
+    "trace": {
+      "type": "object",
+      "required": ["type", "run_id", "seq", "pc", "evidence_level"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "trace", "examples": ["trace"] },
+        "run_id": { "type": "string", "minLength": 1, "description": "所属运行 ID。", "examples": ["run-20261109-000001"] },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "指令序号，0 起（RV32 地址均在 JS 安全整数内）。",
+          "examples": [42]
+        },
+        "pc": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "执行前 PC（uint）。",
+          "examples": [553648260]
+        },
+        "instruction_raw": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]+$",
+          "description": "指令原始字节 hex 字符串（4 字符=压缩指令，8 字符=32 位指令），如 73100730。",
+          "examples": ["73100730", "0040"]
+        },
+        "disasm": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "反汇编文本（人读/报告用；反汇编失败写 unknown）。",
+          "examples": ["csrrw zero, 0x307, t0", "unknown"]
+        },
+        "writeback": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "寄存器写回 {reg, value_old, value_new}。逐条捕获成本高时整体写 unknown（引擎可提供 verbose 开关）。",
+          "examples": [
+            { "reg": "t0", "value_old": 0, "value_new": <BASE_DEC> },
+            "unknown"
+          ]
+        },
+        "mem_access": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "内存访问（RISC-V 单指令至多一次，折叠进行内）。stub=true 表示仿真器伪造的占位值——绝非硬件观测，读者不得当真实数据。region=映射区名或 \"__dynamic__\"。",
+          "examples": [
+            { "kind": "load", "addr": 536870912, "size": 4, "value": 305419896, "stub": true, "region": "ram" },
+            "unknown"
+          ]
+        },
+        "csrs_changed": {
+          "type": "array",
+          "description": "本条指令的 CSR 变化。WARL 纪律：未知 CSR 写=写被忽略（value=attempted 值，warl=true）；未知 CSR 读=返回占位 0（value=0，placeholder=true）；两种行 evidence_level 必须为 hypothesis（WARL 行为本体是假设）。真实 CSR 变化 warl/placeholder 缺省 false。",
+          "items": {
+            "type": "object",
+            "required": ["csr", "op", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "csr": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "CSR 地址编号（uint，如 0x307=775）。",
+                "examples": [775]
+              },
+              "op": {
+                "type": "string",
+                "enum": ["write", "read", "set", "clear"],
+                "description": "访问类型。",
+                "examples": ["write", "read"]
+              },
+              "value": {
+                "$ref": "common.defs.json#/$defs/uint_or_unknown",
+                "description": "写入 attempted 值 / 读回值（占位读=0）。",
+                "examples": [0, 775]
+              },
+              "warl": {
+                "type": "boolean",
+                "default": false,
+                "description": "true=未知 CSR 按 WARL 处理（写被忽略）。",
+                "examples": [true]
+              },
+              "placeholder": {
+                "type": "boolean",
+                "default": false,
+                "description": "true=返回值为占位（未知 CSR 读=0）。",
+                "examples": [false]
+              },
+              "action_detail": {
+                "$ref": "common.defs.json#/$defs/string_or_unknown",
+                "description": "动作细节自由文本。",
+                "examples": ["unknown CSR 0x307 write ignored (WARL)", "unknown"]
+              }
+            }
+          },
+          "examples": [
+            [
+              { "csr": 775, "op": "write", "value": 0, "warl": true, "placeholder": false, "action_detail": "unknown CSR write ignored" },
+              { "csr": 773, "op": "write", "value": 553648611, "warl": false, "placeholder": false, "action_detail": "mtvec install 0x<ADDR>（target-chip r0.4.0 实测形态）" }
+            ]
+          ]
+        },
+        "evidence_level": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "行级证据分级（必填）。stub=true、WARL 行、占位读回 → hypothesis；纯执行观测 → observation；混合取最弱。",
+          "examples": ["observation", "hypothesis"]
+        }
+      }
+    },
+
+    "fault_event": {
+      "type": "object",
+      "required": ["type", "event_id", "run_id", "trigger", "action", "evidence_level"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "fault_event", "examples": ["fault_event"] },
+        "event_id": { "type": "string", "minLength": 1, "description": "事件唯一 ID。", "examples": ["fev-a1b2c3d4e5f6"] },
+        "run_id": { "type": "string", "minLength": 1, "description": "所属运行 ID（run_meta.fault_events 预注册场景可为占位，生效行必有）。", "examples": ["run-20261109-000001", "unknown"] },
+        "campaign_id": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "关联实验 ID；缺失时填 unknown（禁 null）。",
+          "examples": ["camp-20261109-000001", "unknown"]
+        },
+        "trigger": {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "description": "触发条件。delay_ns 的映射来源见 docs/contracts/param-mapping.md。",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["pc", "seq", "cycle_estimate", "every"],
+              "description": "pc=PC 命中触发；seq=第 N 条指令前触发（delay_ns 默认映射目标）；cycle_estimate=按 ns_per_cycle 折算周期；every=每 N 条触发。",
+              "examples": ["seq", "pc"]
+            },
+            "value": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "触发值：pc 模式=地址；seq 模式=指令序号（0 起）；every 模式=间隔 N；cycle_estimate=周期数。",
+              "examples": [3000, "unknown"]
+            },
+            "ns_per_cycle": {
+              "description": "cycle_estimate 模式的折算假设值；其他模式 unknown。",
+              "anyOf": [
+                { "type": "number", "exclusiveMinimum": 0 },
+                { "$ref": "common.defs.json#/$defs/unknown_string" }
+              ],
+              "examples": ["unknown"]
+            }
+          },
+          "examples": [
+            { "mode": "seq", "value": 3000, "ns_per_cycle": "unknown" },
+            { "mode": "pc", "value": 553648260, "ns_per_cycle": "unknown" }
+          ]
+        },
+        "action": {
+          "description": "注入动作。",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "const": "skip", "description": "跳过指令（引擎实现）。", "examples": ["skip"] }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["kind", "reg", "bit_width"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "const": "flip_reg_bits", "description": "按位翻转寄存器（引擎实现）。", "examples": ["flip_reg_bits"] },
+                "reg": { "type": "string", "minLength": 1, "description": "目标寄存器名。", "examples": ["a0"] },
+                "bit_width": { "type": "integer", "minimum": 1, "maximum": 32, "description": "翻转位宽（pulse_ns 默认映射来源）。", "examples": [2] },
+                "bit_mask": { "$ref": "common.defs.json#/$defs/string_or_unknown", "description": "翻转掩码 hex（引擎计算后回填；声明时可为 unknown）。", "examples": ["0x3", "unknown"] },
+                "new_value": { "$ref": "common.defs.json#/$defs/uint_or_unknown", "description": "翻转后新值（引擎生效后回填）。", "examples": ["unknown"] }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "const": "reg_write", "description": "寄存器强写（扩展预留，探索模式）。", "examples": ["reg_write"] },
+                "reg": { "$ref": "common.defs.json#/$defs/string_or_unknown", "description": "目标寄存器。", "examples": ["a0", "unknown"] },
+                "value": { "$ref": "common.defs.json#/$defs/uint_or_unknown", "description": "写入值。", "examples": ["unknown"] }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "const": "mem_write", "description": "内存强写（扩展预留，探索模式）。", "examples": ["mem_write"] },
+                "addr": { "$ref": "common.defs.json#/$defs/uint_or_unknown", "description": "目标地址。", "examples": ["unknown"] },
+                "size": { "$ref": "common.defs.json#/$defs/uint_or_unknown", "description": "写字节数。", "examples": ["unknown"] },
+                "value": { "$ref": "common.defs.json#/$defs/uint_or_unknown", "description": "写入值。", "examples": ["unknown"] }
+              }
+            }
+          ]
+        },
+        "pulse": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "作用宽度：{mode: instruction_count|single_event, value}；single_event 或未知写 unknown。映射见 param-mapping.md。",
+          "examples": [
+            { "mode": "instruction_count", "value": 2 },
+            "unknown"
+          ]
+        },
+        "applied": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "是否已生效：预注册清单=unknown；生效报告=true/false。",
+          "examples": ["unknown", true]
+        },
+        "applied_at_seq": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "实际触发发生在第几条指令（引擎回填）。",
+          "examples": ["unknown", 3000]
+        },
+        "applied_result": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "生效结果自由对象（如 {new_value, old_value, skipped_insn_raw}）；未生效写 unknown。",
+          "examples": ["unknown", { "old_value": 1280, "new_value": 1283 }]
+        },
+        "evidence_level": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "证据分级（必填）：预注册=hypothesis 或 unknown；生效行含仿真器制造的效果 → hypothesis。",
+          "examples": ["hypothesis"]
+        }
+      }
+    },
+
+    "run_end": {
+      "type": "object",
+      "required": ["type", "run_id", "exit_reason", "evidence_level"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "run_end", "examples": ["run_end"] },
+        "run_id": { "type": "string", "minLength": 1, "description": "所属运行 ID。", "examples": ["run-20261109-000001"] },
+        "exit_reason": {
+          "type": "string",
+          "enum": ["normal", "exception", "timeout", "max_instructions", "hang_suspected", "unknown"],
+          "description": "粗粒度结束原因。hang_suspected：死循环判定是启发式（PC 热点/循环模式），『疑似』不得写成事实。WARL 模式下 unsupported_csr 不停机，只体现在 csrs_changed；细分原因（unsupported_csr/unsupported_insn/unmapped_mem_read|write|fetch/internal_error/uc_error/last_insn/regs 快照/stub|warl 统计）放 detail。",
+          "examples": ["exception", "hang_suspected", "max_instructions"]
+        },
+        "final_pc": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "结束 PC。",
+          "examples": [553648260, "unknown"]
+        },
+        "instruction_count": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "已执行指令条数。",
+          "examples": [53]
+        },
+        "detail": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "细分信息自由对象：细分 exit 原因、最后指令、寄存器快照、stub/warl 统计等（结构实现自定并自释）。",
+          "examples": [
+            { "sub_reason": "unmapped_mem_fetch", "last_pc": 553648260, "stub_reads": 12, "warl_ignores": 3 },
+            "unknown"
+          ]
+        },
+        "evidence_level": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "结束行证据分级（必填）。",
+          "examples": ["observation"]
+        }
+      }
+    }
+  }
+}

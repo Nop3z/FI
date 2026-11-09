@@ -1,0 +1,710 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/bitflip-evidence.schema.json",
+  "title": "BitflipEvidence v0.3（位翻转关键证据：一位翻转 ⇒ 码 A 变码 B）",
+  "description": "承载『一个 bit 的翻转就能把一个实验观测到的错误码变成另一个实验观测到的错误码』这条核心证据（Web 端展示用，属对外契约）。**两个防坑字段（v0.3 强制，血的教训）**：(1) `claim.bit_mask_on_reg_value` —— 注入时使用的**寄存器值掩码**；(2) `claim.mask_applies_to` —— 固定常量 `post_insn_reg_value`。原因：`fi.fault.effects` 枚举的是**指令机器码位**，而注入翻转的是**寄存器值位**，两者不是同一组位（I-type 装载指令中机器码位 b 对应立即数位 b-20，如机器码 bit 30 ↔ 寄存器值 bit 10）。历史上拿机器码位当注入掩码（如 0x40000000）会翻到无关高位：码值不变、注入静默失效且不报错。**不变量（语义层强制）**：`bit_mask_on_reg_value` 必须等于 `source_code XOR target_code` 中被翻转位对应的掩码，违反即拒。**证据分级纪律**：`claim.confidence` 恒 hypothesis（预测），`experimental_context.*.count` 属 observation（观测），两者必须分字段承载——UI 不得把预测与观测混成一个数字展示。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "title",
+    "entries",
+    "confidence",
+    "evidence_kind"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "report_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本报告唯一 ID。",
+      "examples": ["bfe-20261109-0001"]
+    },
+
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "报告标题（人读）。",
+      "examples": ["关键证据：单个 bit 翻转即可把实测观测码 A 变成实测观测码 B"]
+    },
+
+    "tool": {
+      "type": "object",
+      "description": "产出工具标识（可复现性要求）。",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "工具模块名。",
+          "examples": ["fi.discover.key_evidence"]
+        },
+        "version": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "工具版本。",
+          "examples": ["0.1.0", "unknown"]
+        }
+      },
+      "examples": [{ "name": "fi.discover.key_evidence", "version": "0.1.0" }]
+    },
+
+    "image": {
+      "type": "object",
+      "description": "被分析镜像的元数据（重放校验用）。",
+      "required": ["path", "sha256", "size_bytes", "base_address"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "镜像路径（相对仓库根）。",
+          "examples": ["firmware.bin"]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "镜像 SHA-256（hex）。",
+          "examples": ["71229c3fd4b0ca0e39e676c65e64b7a14f91f51c42dad9c86db3d0cf67c1c52f"]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "镜像字节数。",
+          "examples": [131072]
+        },
+        "base_address": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "加载基址（uint）。",
+          "examples": [<BASE_DEC>]
+        }
+      },
+      "examples": [
+        {
+          "path": "firmware.bin",
+          "sha256": "71229c3fd4b0ca0e39e676c65e64b7a14f91f51c42dad9c86db3d0cf67c1c52f",
+          "size_bytes": 131072,
+          "base_address": <BASE_DEC>
+        }
+      ]
+    },
+
+    "one_sentence": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "一句话结论（UI 首屏展示用）。",
+      "examples": ["把一个地址常量翻转 1 个 bit，就能把观测码 A 变成观测码 B"]
+    },
+
+    "entries": {
+      "type": "array",
+      "description": "证据条目清单（每条 = 一个『某地址某指令翻某位 ⇒ 码 A 变码 B』的可检验命题）。",
+      "items": { "$ref": "#/$defs/entry" },
+      "examples": [
+        [
+          {
+            "evidence_id": "bf-type-demo",
+            "summary": "在 0x1000 处翻转 1 个 bit，码 0x<CODE_D> → 0x<CODE_B>",
+            "claim": {
+              "source_code": "0x<CODE_D>",
+              "target_code": "0x<CODE_B>",
+              "flip_count_required": 1,
+              "flipped_machine_code_bits": [30],
+              "flipped_reg_value_bits": [10],
+              "bit_mask_on_reg_value": "0x400",
+              "mask_applies_to": "post_insn_reg_value",
+              "confidence": "hypothesis"
+            },
+            "technical_chain": {
+              "target_addr": "0x1000",
+              "insn_bytes_hex": "13054050",
+              "insn": "addi a0, zero, 0x504",
+              "dest_reg": "a0",
+              "original_insn_after_flip": "addi a0, zero, 0x104"
+            },
+            "experimental_context": {
+              "source_code_observations": { "observed": true, "count": 58 },
+              "target_code_observations": { "observed": true, "count": 2676 }
+            },
+            "falsifiable_prediction": {
+              "injection": {
+                "action": "flip_reg_bits",
+                "where": "0x1000",
+                "reg": "a0",
+                "bit_mask": "0x400",
+                "mask_applies_to": "post_insn_reg_value"
+              },
+              "expected": "响应帧码字段由 0x<CODE_D> 变为 0x<CODE_B>"
+            },
+            "confidence": "hypothesis",
+            "evidence_kind": "artifact_derived"
+          }
+        ]
+      ]
+    },
+
+    "code_pair_index": {
+      "type": "array",
+      "description": "按（源码 → 目标码）聚合的索引（UI 可按码对浏览证据；用于快速回答『这对码有几个可行站点』）。",
+      "items": { "$ref": "#/$defs/code_pair" },
+      "examples": [
+        [
+          {
+            "source_code": "0x<CODE_D>",
+            "target_code": "0x<CODE_B>",
+            "n_sites": 3,
+            "sites": ["bf-demo-1", "bf-demo-2", "bf-demo-3"],
+            "source_observed": { "observed": true, "count": 58 },
+            "target_observed": { "observed": true, "count": 2676 }
+          }
+        ]
+      ]
+    },
+
+    "counts": {
+      "type": "object",
+      "description": "汇总计数。",
+      "additionalProperties": false,
+      "properties": {
+        "n_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "证据条目数。",
+          "examples": [10]
+        },
+        "n_distinct_code_pairs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "不同的（源码,目标码）对数。",
+          "examples": [4]
+        }
+      },
+      "examples": [{ "n_entries": 10, "n_distinct_code_pairs": 4 }]
+    },
+
+    "how_to_read": {
+      "type": "array",
+      "description": "阅读指引（给 Web/分析人员的说明，逐条渲染为列表）。",
+      "items": { "type": "string", "minLength": 1 },
+      "examples": [["先看 code_pair_index 找感兴趣的码对，再展开 entries 看站点"]]
+    },
+
+    "discipline": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "证据分级纪律声明（人读）。",
+      "examples": ["全部 hypothesis：观测计数为 observation；两者严格分开，不得混成一个数字"]
+    },
+
+    "confidence": {
+      "type": "string",
+      "const": "hypothesis",
+      "description": "报告整体置信级别恒为 hypothesis（是候选解释，需经仿真或实机验证）。禁止 fact/observation。",
+      "examples": ["hypothesis"]
+    },
+
+    "evidence_kind": {
+      "type": "string",
+      "enum": ["artifact", "artifact_derived"],
+      "description": "证据来源种类。",
+      "examples": ["artifact_derived"]
+    },
+
+    "generated_at": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "生成时刻。",
+      "examples": ["2026-11-09T23:20:00+08:00", "unknown"]
+    }
+  },
+
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "description": "一条位翻转证据。claim 是**预测**（恒 hypothesis），experimental_context 是**观测**（observation），两者分字段、不得混写。",
+      "required": [
+        "evidence_id",
+        "summary",
+        "claim",
+        "experimental_context",
+        "confidence",
+        "evidence_kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "证据稳定 ID（小写，可含 ._-）。",
+          "examples": ["bf-0504-to-0104-at-1000"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要（含地址、翻转位数、源码与目标码）。",
+          "examples": ["在 0x1000 处翻转 1 个 bit，错误码 0x<CODE_D> → 0x<CODE_B>"]
+        },
+        "claim": { "$ref": "#/$defs/claim" },
+        "technical_chain": { "$ref": "#/$defs/technical_chain" },
+        "experimental_context": { "$ref": "#/$defs/experimental_context" },
+        "falsifiable_prediction": { "$ref": "#/$defs/falsifiable_prediction" },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "条目置信级别恒为 hypothesis（预测性命题，未经仿真/实测复现）。",
+          "examples": ["hypothesis"]
+        },
+        "evidence_kind": {
+          "type": "string",
+          "enum": ["artifact", "artifact_derived"],
+          "description": "条目证据来源种类。",
+          "examples": ["artifact_derived"]
+        }
+      },
+      "examples": [
+        {
+          "evidence_id": "bf-demo",
+          "summary": "在 0x1000 处翻转 1 个 bit，码 0x<CODE_D> → 0x<CODE_B>",
+          "claim": {
+            "source_code": "0x<CODE_D>",
+            "target_code": "0x<CODE_B>",
+            "flip_count_required": 1,
+            "flipped_machine_code_bits": [30],
+            "flipped_reg_value_bits": [10],
+            "bit_mask_on_reg_value": "0x400",
+            "mask_applies_to": "post_insn_reg_value",
+            "confidence": "hypothesis"
+          },
+          "technical_chain": {
+            "target_addr": "0x1000",
+            "insn_bytes_hex": "13054050",
+            "insn": "addi a0, zero, 0x504",
+            "dest_reg": "a0"
+          },
+          "experimental_context": {
+            "source_code_observations": { "observed": true, "count": 58 },
+            "target_code_observations": { "observed": true, "count": 2676 }
+          },
+          "confidence": "hypothesis",
+          "evidence_kind": "artifact_derived"
+        }
+      ]
+    },
+
+    "claim": {
+      "type": "object",
+      "description": "核心断言：源码经 N 个 bit 翻转变成目标码。**防坑字段必填**：`bit_mask_on_reg_value`（寄存器值掩码，注入用）+ `mask_applies_to`（固定常量，明确掩码作用于寄存器值而非机器码）。",
+      "required": [
+        "source_code",
+        "target_code",
+        "flip_count_required",
+        "flipped_reg_value_bits",
+        "bit_mask_on_reg_value",
+        "mask_applies_to",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source_code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "源错误码（数据源原样字面量）。",
+          "examples": ["0x<CODE_D>"]
+        },
+        "target_code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "目标错误码（翻转后）。",
+          "examples": ["0x<CODE_B>"]
+        },
+        "flip_count_required": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "达成该迁移所需的位翻转个数。",
+          "examples": [1]
+        },
+        "flipped_machine_code_bits": {
+          "type": "array",
+          "description": "被翻转的**机器码**位位置（LSB=0 起算；来自 fi.fault.effects 枚举）。仅作静态分析证据，**不得直接用于注入**（见 bit_mask_on_reg_value）。",
+          "items": { "type": "integer", "minimum": 0 },
+          "examples": [[30]]
+        },
+        "flipped_reg_value_bits": {
+          "type": "array",
+          "description": "**必填**：对应的**寄存器值**位位置（LSB=0 起算）——这才是注入时翻转的位。I-type 装载指令中与机器码位的关系通常为 `reg_bit = machine_bit - 20`。",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 0 },
+          "examples": [[10]]
+        },
+        "bit_mask_on_reg_value": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{1,8}$",
+          "description": "**防坑字段 1（必填）**：注入时施加在**寄存器值**上的位掩码（hex）。必须由 `flipped_reg_value_bits` 导出（mask = Σ 1<<bit）。**语义不变量**：`bits(source_code XOR target_code)` 必须与 `flipped_reg_value_bits` 一致，且 mask 必须等于这些位的掩码，否则拒。历史 bug：拿机器码位当注入掩码（如 0x40000000）会翻到无关高位，码值不变、注入静默失效。",
+          "examples": ["0x400"]
+        },
+        "mask_applies_to": {
+          "type": "string",
+          "const": "post_insn_reg_value",
+          "description": "**防坑字段 2（必填，固定常量）**：明确该掩码作用于『指令执行后的寄存器值』，而不是机器码、不是指令字节、不是内存。schema const 强制，写错即拒。",
+          "examples": ["post_insn_reg_value"]
+        },
+        "physically_explains": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "该翻转解释了什么的自然语言说明（为什么一位翻转足以解释观测迁移）。",
+          "examples": ["单 bit 1→0 即可把一个实测码变成另一个实测码，无需多 bit 命中或路径改变"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "断言置信级别恒为 hypothesis（预测，未经复现）。观测计数在 experimental_context 中另行标注 observation——**两者不得混为一个数字**。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "source_code": "0x<CODE_D>",
+          "target_code": "0x<CODE_B>",
+          "flip_count_required": 1,
+          "flipped_machine_code_bits": [30],
+          "flipped_reg_value_bits": [10],
+          "bit_mask_on_reg_value": "0x400",
+          "mask_applies_to": "post_insn_reg_value",
+          "physically_explains": "单 bit 1→0 即可把实测码 A 变成实测码 B",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "technical_chain": {
+      "type": "object",
+      "description": "技术链条（地址 → 指令 → 翻转后指令），供人工复核与重放。",
+      "required": ["target_addr", "insn_bytes_hex", "insn"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "关联命令字（如 0x51）。",
+          "examples": ["0x51", "unknown"]
+        },
+        "handler": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "handler 地址。",
+          "examples": ["0x100000c4", "unknown"]
+        },
+        "target_addr": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{1,16}$",
+          "description": "目标指令地址（hex 字符串，保留原样便于比对）。",
+          "examples": ["0x1000"]
+        },
+        "target_offset_in_image": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "镜像内字节偏移。",
+          "examples": [6888, "unknown"]
+        },
+        "insn_bytes_hex": {
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{2})+$",
+          "description": "原始指令机器码（hex）。",
+          "examples": ["13054050"]
+        },
+        "insn": {
+          "type": "string",
+          "minLength": 1,
+          "description": "原始指令反汇编。",
+          "examples": ["addi a0, zero, 0x504"]
+        },
+        "dest_reg": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "承载码值的寄存器（注入目标寄存器）。",
+          "examples": ["a0", "unknown"]
+        },
+        "original_insn_after_flip": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "翻转后的指令反汇编（用于判断是否仍可正常执行）。",
+          "examples": ["addi a0, zero, 0x104", "unknown"]
+        },
+        "instruction_decodable_after_flip": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "翻转后指令是否仍可译码（false=变成非法指令，会触发 trap）。",
+          "examples": [true, false, "unknown"]
+        },
+        "why_decodable": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "可译码原因说明（如翻转落在立即数有效位内，opcode/rd/rs1 未变）。",
+          "examples": ["翻转落在 12 位立即数有效位内，opcode/rd/rs1 均未变"]
+        },
+        "static_evidence": {
+          "type": "array",
+          "description": "静态证据清单（逐条可复核的反汇编/归因结论）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["机器码 13054050 反汇编 = addi a0, zero, 0x504"]]
+        }
+      },
+      "examples": [
+        {
+          "command": "0x51",
+          "handler": "0x100000c4",
+          "target_addr": "0x1000",
+          "target_offset_in_image": 6888,
+          "insn_bytes_hex": "13054050",
+          "insn": "addi a0, zero, 0x504",
+          "dest_reg": "a0",
+          "original_insn_after_flip": "addi a0, zero, 0x104",
+          "instruction_decodable_after_flip": true,
+          "why_decodable": "翻转落在立即数有效位内",
+          "static_evidence": ["机器码反汇编核对通过"]
+        }
+      ]
+    },
+
+    "experimental_context": {
+      "type": "object",
+      "description": "实验语境（**观测侧，属 observation**）：两个码在真实数据集中各出现多少次。与 claim（预测，hypothesis）严格分字段。",
+      "required": ["source_code_observations", "target_code_observations"],
+      "additionalProperties": false,
+      "properties": {
+        "source_code_observations": { "$ref": "#/$defs/code_observations" },
+        "target_code_observations": { "$ref": "#/$defs/code_observations" },
+        "note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "语境说明（如『两码都出现在同一数据集 ⇒ 该迁移可被数据检验』）。",
+          "examples": ["两个码都出现在同一实验数据集内，可被数据检验"]
+        }
+      },
+      "examples": [
+        {
+          "source_code_observations": { "observed": true, "count": 58 },
+          "target_code_observations": { "observed": true, "count": 2676 },
+          "note": "两码同数据集出现"
+        }
+      ]
+    },
+
+    "code_observations": {
+      "type": "object",
+      "description": "单个码的观测统计（**observation 级**；UI 必须与 claim 的 hypothesis 分开标注）。",
+      "required": ["observed", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "observed": {
+          "type": "boolean",
+          "description": "该码在数据集中是否被观测到。",
+          "examples": [true, false]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "观测行数（观测事实，非预测）。",
+          "examples": [58]
+        },
+        "rate": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "占全部行的比例。",
+          "examples": [7.836e-05, "unknown"]
+        },
+        "states": {
+          "type": "object",
+          "description": "该码出现的原始状态标签分布（键为标签字面量）。",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "examples": [{ "UNEXPECTED": 53, "Fake_Success": 5 }]
+        },
+        "delay_raw_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "该码出现时的 delay 原始刻度区间 [min, max]。",
+          "examples": [[3131, 3190]]
+        }
+      },
+      "examples": [
+        {
+          "observed": true,
+          "count": 58,
+          "rate": 7.836e-05,
+          "states": { "UNEXPECTED": 53, "Fake_Success": 5 },
+          "delay_raw_range": [3131, 3190]
+        }
+      ]
+    },
+
+    "falsifiable_prediction": {
+      "type": "object",
+      "description": "可证伪预测（这条证据怎么被检验/推翻）。UI 应展示『支持/推翻条件』，让读者知道这不是不可错的结论。",
+      "required": ["injection", "expected"],
+      "additionalProperties": false,
+      "properties": {
+        "injection": { "$ref": "#/$defs/injection_spec" },
+        "expected": {
+          "type": "string",
+          "minLength": 1,
+          "description": "预期观测结果（可逐字比对）。",
+          "examples": ["响应帧码字段由 0x<CODE_D> 变为 0x<CODE_B>，magic 与长度字段与基线一致"]
+        },
+        "verification_rule": {
+          "type": "object",
+          "description": "判定规则（支持/推翻条件清单）。",
+          "additionalProperties": false,
+          "properties": {
+            "supports_hypothesis_if": {
+              "type": "array",
+              "description": "支持该假设的观测条件。",
+              "items": { "type": "string", "minLength": 1 },
+              "examples": [["观测到目标码且帧结构不变"]]
+            },
+            "refutes_hypothesis_if": {
+              "type": "array",
+              "description": "推翻该假设的观测条件。",
+              "items": { "type": "string", "minLength": 1 },
+              "examples": [["帧 magic/长度也变化（更可能打中发送函数）"]]
+            }
+          },
+          "examples": [
+            {
+              "supports_hypothesis_if": ["观测到目标码且帧结构不变"],
+              "refutes_hypothesis_if": ["帧 magic/长度也变化"]
+            }
+          ]
+        },
+        "negative_control": {
+          "type": "object",
+          "description": "阴性对照（不注入时应看到什么，用于排除『本来就是目标码』的假阳性）。",
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "对照动作（如 skip_insn）。",
+              "examples": ["skip_insn", "unknown"]
+            },
+            "expected_if_not_hit": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "未命中时的预期（与基线一致）。",
+              "examples": ["未命中时源码正常上报，与基线一致"]
+            }
+          },
+          "examples": [
+            { "action": "skip_insn", "expected_if_not_hit": "未命中时源码正常上报" }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "injection": {
+            "action": "flip_reg_bits",
+            "where": "0x1000",
+            "reg": "a0",
+            "bit_mask": "0x400",
+            "mask_applies_to": "post_insn_reg_value"
+          },
+          "expected": "响应帧码字段由 0x<CODE_D> 变为 0x<CODE_B>",
+          "verification_rule": {
+            "supports_hypothesis_if": ["观测到目标码且帧结构不变"],
+            "refutes_hypothesis_if": ["帧 magic/长度也变化"]
+          },
+          "negative_control": {
+            "action": "skip_insn",
+            "expected_if_not_hit": "未命中时源码正常上报"
+          }
+        }
+      ]
+    },
+
+    "injection_spec": {
+      "type": "object",
+      "description": "注入规格（喂给 fi.sim / 实机注入器的参数）。**bit_mask 必须是寄存器值掩码**，mask_applies_to 必须为 post_insn_reg_value。",
+      "required": ["action", "where", "reg", "bit_mask", "mask_applies_to"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["flip_reg_bits", "skip_insn", "reg_write", "mem_write"],
+          "description": "注入动作（发现层用 skip_insn 语义名；仿真引擎用 skip，映射见契约 README §6.1）。",
+          "examples": ["flip_reg_bits", "skip_insn"]
+        },
+        "where": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{1,16}$",
+          "description": "注入点地址（hex 字符串）。",
+          "examples": ["0x1000"]
+        },
+        "reg": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "目标寄存器（ABI 名）；非寄存器动作写 unknown。",
+          "examples": ["a0", "unknown"]
+        },
+        "bit_mask": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{1,8}$",
+          "description": "**寄存器值掩码**（不是机器码掩码！）。",
+          "examples": ["0x400"]
+        },
+        "mask_applies_to": {
+          "type": "string",
+          "const": "post_insn_reg_value",
+          "description": "掩码作用对象常量（防坑：明确是寄存器值）。",
+          "examples": ["post_insn_reg_value"]
+        },
+        "note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "注入说明（含位位置换算提示）。",
+          "examples": ["翻寄存器值位 [10]（= 机器码位 [30]）"]
+        }
+      },
+      "examples": [
+        {
+          "action": "flip_reg_bits",
+          "where": "0x1000",
+          "reg": "a0",
+          "bit_mask": "0x400",
+          "mask_applies_to": "post_insn_reg_value",
+          "note": "翻寄存器值位 [10]"
+        }
+      ]
+    },
+
+    "code_pair": {
+      "type": "object",
+      "description": "（源码 → 目标码）聚合条目。",
+      "required": ["source_code", "target_code", "n_sites", "sites"],
+      "additionalProperties": false,
+      "properties": {
+        "source_code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "源码字面量。",
+          "examples": ["0x<CODE_D>"]
+        },
+        "target_code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "目标码字面量。",
+          "examples": ["0x<CODE_B>"]
+        },
+        "n_sites": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "该码对的可选站点数。",
+          "examples": [3]
+        },
+        "sites": {
+          "type": "array",
+          "description": "证据条目 ID 清单（指向 entries[].evidence_id）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["bf-demo-1", "bf-demo-2"]]
+        },
+        "source_observed": { "$ref": "#/$defs/code_observations" },
+        "target_observed": { "$ref": "#/$defs/code_observations" }
+      },
+      "examples": [
+        {
+          "source_code": "0x<CODE_D>",
+          "target_code": "0x<CODE_B>",
+          "n_sites": 3,
+          "sites": ["bf-demo-1"],
+          "source_observed": { "observed": true, "count": 58 },
+          "target_observed": { "observed": true, "count": 2676 }
+        }
+      ]
+    }
+  }
+}

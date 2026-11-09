@@ -1,0 +1,874 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/reverse-report.schema.json",
+  "title": "ReverseReport v0.3（功能级逆向结论）",
+  "description": "承载『功能级逆向结论』：从用户声明的目标功能（如 ISP 模式 write）出发，给出入口、可达调用链、运行时间估算与精确注入靶点。方法论见 docs/methodology-reverse-first.md（逆向先行：声明目标 → 静态逆向 → 构造调用链 → 评估运行时间 → 构造注入点 → 试运行验证 → 反馈）。三条硬约束：(1) 每个断言必带 confidence ∈ observation|hypothesis|unknown，call_chain 条目默认 hypothesis，未经仿真/实测验证不得标 observation；(2) call_chain/entry_points/injection_targets 的每一层都必须带 evidence_ref，指向本文件 evidence_refs 中登记的条目（JSON Schema 强制字段存在，引用完整性由 fi.schemas.invariants 语义校验 + 门禁测试强制）；(3) timing_estimate 禁止裸数字：cycles 与 ns 必须显式携带 ns_per_cycle 假设对象，换算关系写入 formula。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "target_feature",
+    "entry_points",
+    "call_chain",
+    "timing_estimate",
+    "injection_targets",
+    "evidence_refs",
+    "unknowns",
+    "confidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "report_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本报告唯一 ID。",
+      "examples": ["rev-20261109-0001"]
+    },
+
+    "target_feature": {
+      "type": "object",
+      "description": "被逆向的目标功能声明（第一步：声明目标）。功能 ID 是稳定短名，供其他契约与 UI 引用。",
+      "required": ["id", "title", "mode", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "功能稳定短名（小写字母开头，允许数字与下划线）。",
+          "examples": ["isp_write", "uart_command_handler"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "人类可读功能标题。",
+          "examples": ["ISP 模式 write 实现流程"]
+        },
+        "mode": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "运行模式（ISP / bootloader / APP / RTOS 等；模式枚举不写死，缺失写 unknown）。",
+          "examples": ["ISP", "APP", "unknown"]
+        },
+        "description": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "目标功能的行为描述（做什么、期望什么结果）。",
+          "examples": ["主机经命令通道下发 write 请求，固件校验后写目标存储并回帧"]
+        },
+        "success_criteria": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "判定该功能『正常完成』的可观测标准（用于构造期望的反常效果）。",
+          "examples": ["返回 OK 帧且目标地址内容更新"]
+        }
+      },
+      "examples": [
+        {
+          "id": "isp_write",
+          "title": "ISP 模式 write 实现流程",
+          "mode": "ISP",
+          "description": "主机经命令通道下发 write 请求，固件校验后写目标存储并回帧",
+          "success_criteria": "返回 OK 帧且目标地址内容更新"
+        }
+      ]
+    },
+
+    "tool": {
+      "type": "object",
+      "description": "产出本报告的逆向工具标识（可复现性要求）。",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "工具名（如 fi.discover.chain）。",
+          "examples": ["fi.discover.chain"]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "工具版本（语义化）。",
+          "examples": ["0.3.0"]
+        }
+      },
+      "examples": [{ "name": "fi.discover.chain", "version": "0.3.0" }]
+    },
+
+    "image": { "$ref": "#/$defs/image_meta" },
+
+    "entry_points": {
+      "type": "array",
+      "description": "进入目标功能的入口集合（复位向量 / 命令分发 / 共享发送函数等）。空数组=尚未定位入口（必须在 unknowns 登记）。",
+      "items": { "$ref": "#/$defs/entry_point" },
+      "examples": [
+        [
+          {
+            "kind": "command_dispatch",
+            "addr": 4660,
+            "description": "命令字分发比较链的入口",
+            "evidence_ref": "ev-001",
+            "confidence": "hypothesis"
+          }
+        ]
+      ]
+    },
+
+    "call_chain": {
+      "type": "array",
+      "description": "从入口到目标指令的逐层可达调用链（level 从 0 起递增，0=入口层）。纪律：条目默认 confidence=hypothesis，直到仿真/实测验证（observation 需给 verified_by）。",
+      "items": { "$ref": "#/$defs/call_chain_entry" },
+      "examples": [
+        [
+          {
+            "level": 0,
+            "function_addr": 4096,
+            "function_name": "func_00001000",
+            "caller_addr": "unknown",
+            "call_site_addr": "unknown",
+            "call_site_insn": "unknown",
+            "conditions": ["复位后首次进入命令循环"],
+            "error_exits": [],
+            "evidence_ref": "ev-001",
+            "confidence": "hypothesis"
+          },
+          {
+            "level": 1,
+            "function_addr": 8192,
+            "function_name": "func_00002000",
+            "caller_addr": 4096,
+            "call_site_addr": 4132,
+            "call_site_insn": "jal ra, 0x2000",
+            "conditions": ["命令字匹配 write 分支"],
+            "error_exits": [
+              {
+                "code_raw": "0x0001",
+                "condition": "长度字段越界",
+                "path": "回错误帧后返回",
+                "evidence_ref": "ev-002",
+                "confidence": "hypothesis"
+              }
+            ],
+            "evidence_ref": "ev-002",
+            "confidence": "hypothesis"
+          }
+        ]
+      ]
+    },
+
+    "timing_estimate": { "$ref": "#/$defs/timing_estimate" },
+
+    "injection_targets": {
+      "type": "array",
+      "description": "基于调用链挑选的精确注入靶点（不是盲扫）：地址 + 指令 + 期望反常效果 + 依据。空数组=尚未选定靶点（必须在 unknowns 登记）。",
+      "items": { "$ref": "#/$defs/injection_target" },
+      "examples": [
+        [
+          {
+            "addr": 8236,
+            "insn": "lw a0, 12(sp)",
+            "expected_undesired_effect": "读回长度字段被翻转 → 后续边界检查走错误出口",
+            "rationale": "该 load 是 write 长度校验的唯一数据来源，位翻转在 mcause 可观测",
+            "evidence_ref": "ev-003",
+            "suggested_action": "flip_reg_bits",
+            "confidence": "hypothesis"
+          }
+        ]
+      ]
+    },
+
+    "evidence_refs": {
+      "type": "array",
+      "description": "本报告引用的证据登记表（id 唯一，被 call_chain/entry_points/injection_targets 逐条引用）。无证据的断言不得进 call_chain。",
+      "items": { "$ref": "#/$defs/evidence_ref" },
+      "examples": [
+        [
+          {
+            "id": "ev-001",
+            "kind": "artifact_derived",
+            "locator": "fi discover chain --feature isp_write（可重放命令）",
+            "detail": "从镜像入口递归下降得到的调用边",
+            "sha256": "unknown",
+            "verification": "python -m fi.discover.chain --image <bin> --base <addr>",
+            "confidence": "hypothesis"
+          }
+        ]
+      ]
+    },
+
+    "unknowns": {
+      "type": "array",
+      "description": "显式未知清单（缺什么材料、阻塞哪个结论、下一步怎么探测）。禁止把未知写成猜测值塞进 value 字段。",
+      "items": { "$ref": "#/$defs/unknown_item" },
+      "examples": [
+        [
+          {
+            "topic": "命令通道帧格式",
+            "description": "write 请求的帧头与长度字段布局未确认",
+            "needed_material": "公开协议文档或仿真观测到的完整帧",
+            "blocks": ["injection_targets[0]"],
+            "suggested_probe": "以最小请求试运行并抓 UART 原始字节",
+            "confidence": "unknown"
+          }
+        ]
+      ]
+    },
+
+    "confidence": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "报告整体证据等级（取最弱级）：静态逆向未跑仿真 → hypothesis；已由仿真/实测验证关键链路 → observation；无有效证据 → unknown。",
+      "examples": ["hypothesis"]
+    },
+
+    "notes": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "备注（方法论取舍、边界、下一步）。",
+      "examples": ["间接调用边未解析，调用链可能缺层"]
+    },
+
+    "generated_at": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "报告生成时刻。",
+      "examples": ["2026-11-09T19:00:00+08:00", "unknown"]
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "不变量 1a：call_chain 非空 ⇒ 必须登记证据（无证据不可断言调用链）。",
+      "if": {
+        "properties": { "call_chain": { "minItems": 1 } },
+        "required": ["call_chain"]
+      },
+      "then": {
+        "properties": { "evidence_refs": { "minItems": 1 } }
+      }
+    },
+    {
+      "description": "不变量 1b：entry_points 非空 ⇒ 必须登记证据。",
+      "if": {
+        "properties": { "entry_points": { "minItems": 1 } },
+        "required": ["entry_points"]
+      },
+      "then": {
+        "properties": { "evidence_refs": { "minItems": 1 } }
+      }
+    },
+    {
+      "description": "不变量 1c：injection_targets 非空 ⇒ 必须登记证据。",
+      "if": {
+        "properties": { "injection_targets": { "minItems": 1 } },
+        "required": ["injection_targets"]
+      },
+      "then": {
+        "properties": { "evidence_refs": { "minItems": 1 } }
+      }
+    }
+  ],
+
+  "$defs": {
+    "image_meta": {
+      "type": "object",
+      "description": "被逆向镜像的元数据（重放校验用）。",
+      "required": ["path", "sha256", "size_bytes", "base_address"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "镜像路径（相对仓库根）。",
+          "examples": ["firmware.bin"]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "镜像 SHA-256（hex）。",
+          "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "镜像字节数。",
+          "examples": [131072]
+        },
+        "base_address": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "加载基址（调用方给定事实，十进制 uint）。",
+          "examples": [134217728]
+        }
+      },
+      "examples": [
+        {
+          "path": "firmware.bin",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 131072,
+          "base_address": 134217728
+        }
+      ]
+    },
+
+    "entry_point": {
+      "type": "object",
+      "description": "目标功能的一个入口点。",
+      "required": ["kind", "addr", "description", "evidence_ref", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["reset_vector", "command_dispatch", "interrupt", "shared_send_function", "table_entry", "other"],
+          "description": "入口类型：复位向量 / 命令分发 / 中断 / 共享发送函数 / 函数指针表 / 其他。",
+          "examples": ["command_dispatch", "reset_vector"]
+        },
+        "addr": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "入口地址（uint）；未定位写 unknown。",
+          "examples": [4660, "unknown"]
+        },
+        "description": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "入口说明。",
+          "examples": ["命令字分发比较链的入口"]
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "指向本报告 evidence_refs[].id（引用完整性由语义校验强制）。",
+          "examples": ["ev-001"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该入口结论的证据等级。",
+          "examples": ["hypothesis"]
+        },
+        "notes": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "备注。",
+          "examples": ["unknown"]
+        }
+      },
+      "examples": [
+        {
+          "kind": "command_dispatch",
+          "addr": 4660,
+          "description": "命令字分发比较链的入口",
+          "evidence_ref": "ev-001",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "call_chain_entry": {
+      "type": "object",
+      "description": "调用链的一层（level 0 = 入口层，逐层递增）。默认 hypothesis：静态调用边未经仿真验证前不得标 observation。",
+      "required": ["level", "function_addr", "evidence_ref", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "层级序号（0 起，逐层递增；同一层可有多个候选函数，用同 level 多条表示）。",
+          "examples": [0, 1]
+        },
+        "function_addr": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "该层函数入口地址（uint，必填：调用链条目必须可定位）。必须携带 evidence_ref 指向证据，未定位到地址的函数不得作为调用链条目（写进 unknowns）。",
+          "examples": [4096, 8192]
+        },
+        "function_name": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "函数名（无符号表时用占位名 func_<addr>，语义命名需要证据）。",
+          "examples": ["func_00001000", "unknown"]
+        },
+        "caller_addr": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "调用方函数地址；level=0 的根层写 unknown。",
+          "examples": [4096, "unknown"]
+        },
+        "call_site_addr": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "调用点指令地址（caller 内）；根层写 unknown。",
+          "examples": [4132, "unknown"]
+        },
+        "call_site_insn": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "调用点指令文本（反汇编原样）。",
+          "examples": ["jal ra, 0x2000", "unknown"]
+        },
+        "conditions": {
+          "type": "array",
+          "description": "进入该层的条件（分支条件/协议字段/状态前置），每条为自然语言断言。空数组=无额外条件或未知。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["命令字匹配 write 分支", "长度字段非零"]]
+        },
+        "error_exits": {
+          "type": "array",
+          "description": "该层可走到的错误出口（错误码装载点/错误帧/异常路径）。空数组=未发现或未知。",
+          "items": { "$ref": "#/$defs/error_exit" },
+          "examples": [
+            [
+              {
+                "code_raw": "0x0001",
+                "condition": "长度字段越界",
+                "path": "回错误帧后返回",
+                "evidence_ref": "ev-002",
+                "confidence": "hypothesis"
+              }
+            ]
+          ]
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "本层结论的证据引用（必填，不变量：必须存在于 evidence_refs）。",
+          "examples": ["ev-002"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本层结论的证据等级。默认 hypothesis：静态可达性/调用边是结构推断；标 observation 需实测/仿真动态命中（并给 verified_by）。",
+          "default": "hypothesis",
+          "examples": ["hypothesis"]
+        },
+        "verified_by": {
+          "type": "string",
+          "enum": ["simulation", "measurement", "cross_validation"],
+          "description": "把该层升到 observation 的验证手段（confidence=observation 时必填）：simulation=仿真动态命中该调用点；measurement=实机实测；cross_validation=静态+动态/数据三方对齐。",
+          "examples": ["simulation"]
+        },
+        "notes": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "备注（分支取舍、间接调用等边界）。",
+          "examples": ["unknown"]
+        }
+      },
+      "allOf": [
+        {
+          "description": "不变量 2：call_chain 条目未经动态验证不得标 observation（observation ⇒ verified_by）。",
+          "if": {
+            "properties": { "confidence": { "const": "observation" } },
+            "required": ["confidence"]
+          },
+          "then": { "required": ["verified_by"] }
+        }
+      ],
+      "examples": [
+        {
+          "level": 1,
+          "function_addr": 8192,
+          "function_name": "func_00002000",
+          "caller_addr": 4096,
+          "call_site_addr": 4132,
+          "call_site_insn": "jal ra, 0x2000",
+          "conditions": ["命令字匹配 write 分支"],
+          "error_exits": [],
+          "evidence_ref": "ev-002",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "error_exit": {
+      "type": "object",
+      "description": "错误出口（错误码装载/错误帧/异常路径）。",
+      "required": ["condition", "path", "evidence_ref", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "code_raw": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "错误码原始字面量（保留数据源形态）；无语义确认时按字面量记录。",
+          "examples": ["0x0001", "unknown"]
+        },
+        "condition": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "触发该错误出口的条件。",
+          "examples": ["长度字段越界"]
+        },
+        "path": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "出口后的控制流走向（返回/长跳/停机）。",
+          "examples": ["回错误帧后返回"]
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "证据引用。",
+          "examples": ["ev-002"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该出口结论的证据等级。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "code_raw": "0x0001",
+          "condition": "长度字段越界",
+          "path": "回错误帧后返回",
+          "evidence_ref": "ev-002",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "timing_estimate": {
+      "type": "object",
+      "description": "运行时间估算（delay 调参的前提）。硬约束：禁止裸数字——cycles 与 ns 必须显式携带 ns_per_cycle 假设对象，换算关系写 formula；ns 是假设推导值，不是观测值。",
+      "required": ["cycles", "ns_per_cycle", "ns_estimate", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "cycles": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "链路上到目标指令的周期数估算（uint；无周期模型时写 unknown）。",
+          "examples": [12000, "unknown"]
+        },
+        "ns_per_cycle": {
+          "type": "object",
+          "description": "周期→ns 的换算假设（必填对象，禁止写成裸数字）：value=每周期 ns 数；confidence 标注该频率假设的证据等级；basis 写明依据。",
+          "required": ["value", "confidence"],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "description": "每周期纳秒数（正数），或显式 unknown。",
+              "anyOf": [
+                { "type": "number", "exclusiveMinimum": 0 },
+                { "$ref": "common.defs.json#/$defs/unknown_string" }
+              ],
+              "examples": [6.25, "unknown"]
+            },
+            "confidence": {
+              "$ref": "common.defs.json#/$defs/evidence_level",
+              "description": "该频率假设的证据等级（未证实只能 hypothesis/unknown）。",
+              "examples": ["hypothesis"]
+            },
+            "basis": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "假设依据（主频来源/公开文档/实测）。",
+              "examples": ["公开文档标称主频 160MHz 折算 6.25ns/cycle（旁证）", "unknown"]
+            }
+          },
+          "examples": [
+            { "value": 6.25, "confidence": "hypothesis", "basis": "公开文档标称主频折算（旁证）" }
+          ]
+        },
+        "ns_estimate": {
+          "type": "object",
+          "description": "换算后的 ns 估算（推导值，非观测）：value = cycles × ns_per_cycle。",
+          "required": ["value", "formula", "confidence"],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "估算 ns 值（uint，四舍五入）；无法换算写 unknown。",
+              "examples": [75000, "unknown"]
+            },
+            "formula": {
+              "type": "string",
+              "const": "cycles * ns_per_cycle",
+              "description": "换算公式常量（固定，防止各实现自造口径）。",
+              "examples": ["cycles * ns_per_cycle"]
+            },
+            "confidence": {
+              "$ref": "common.defs.json#/$defs/evidence_level",
+              "description": "ns 估算的证据等级：依赖 ns_per_cycle 假设，通常 hypothesis 或 unknown。",
+              "examples": ["hypothesis", "unknown"]
+            }
+          },
+          "examples": [
+            { "value": 75000, "formula": "cycles * ns_per_cycle", "confidence": "hypothesis" }
+          ]
+        },
+        "target_window_ns": {
+          "type": "object",
+          "description": "由估算得到的 delay 搜索窗口（ns），供闭环参数窗口使用；不给则省略。",
+          "required": ["min_ns", "max_ns"],
+          "additionalProperties": false,
+          "properties": {
+            "min_ns": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "窗口下界（ns）。",
+              "examples": [70000]
+            },
+            "max_ns": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "窗口上界（ns）。",
+              "examples": [80000]
+            }
+          },
+          "examples": [{ "min_ns": 70000, "max_ns": 80000 }]
+        },
+        "segments": {
+          "type": "array",
+          "description": "链路分段耗时估算（每段对应 call_chain 的一层或一段循环）；空数组=未分段。",
+          "items": { "$ref": "#/$defs/timing_segment" },
+          "examples": [
+            [
+              {
+                "name": "命令接收与解析",
+                "cycles": 2000,
+                "ns_estimate": "unknown",
+                "evidence_ref": "ev-001",
+                "confidence": "hypothesis"
+              }
+            ]
+          ]
+        },
+        "method": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "估算方法说明（静态指令计数×假设 CPI / 仿真周期统计 / 实测）。",
+          "examples": ["静态指令计数 × 假设 CPI=1（无周期级时序模型）"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "整体时间估算的证据等级（必填）。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "cycles": 12000,
+          "ns_per_cycle": { "value": 6.25, "confidence": "hypothesis", "basis": "公开文档标称主频折算（旁证）" },
+          "ns_estimate": { "value": 75000, "formula": "cycles * ns_per_cycle", "confidence": "hypothesis" },
+          "target_window_ns": { "min_ns": 70000, "max_ns": 80000 },
+          "method": "静态指令计数 × 假设 CPI=1",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "timing_segment": {
+      "type": "object",
+      "description": "链路分段耗时估算条目。",
+      "required": ["name", "cycles", "ns_estimate", "evidence_ref", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "分段名（对应链路阶段）。",
+          "examples": ["命令接收与解析"]
+        },
+        "cycles": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "该段周期数。",
+          "examples": [2000, "unknown"]
+        },
+        "ns_estimate": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "该段 ns 估算（必须由顶层 ns_per_cycle 换算；不单独给频率）。",
+          "examples": [12500, "unknown"]
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "证据引用。",
+          "examples": ["ev-001"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该段估算的证据等级。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "name": "命令接收与解析",
+          "cycles": 2000,
+          "ns_estimate": 12500,
+          "evidence_ref": "ev-001",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "injection_target": {
+      "type": "object",
+      "description": "精确注入靶点（基于调用链挑选，不是盲枚举）。",
+      "required": ["addr", "insn", "expected_undesired_effect", "rationale", "evidence_ref", "suggested_action", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "addr": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "靶点指令地址（uint，必填）。",
+          "examples": [8236]
+        },
+        "insn": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "靶点指令反汇编文本。",
+          "examples": ["lw a0, 12(sp)", "unknown"]
+        },
+        "expected_undesired_effect": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "期望制造的反常效果（要可观测：错误码/帧/行为差异）。",
+          "examples": ["读回长度字段被翻转 → 后续边界检查走错误出口"]
+        },
+        "rationale": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "选点依据（为何这条指令的关键路径能产生可观测差异）。",
+          "examples": ["该 load 是长度校验的唯一数据来源"]
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "证据引用（指向调用链/反汇编证据）。",
+          "examples": ["ev-003"]
+        },
+        "suggested_action": {
+          "type": "string",
+          "enum": ["skip", "flip_reg_bits", "reg_write", "mem_write"],
+          "description": "建议注入动作（**与 sim-trace fault_event.action.kind 枚举完全一致**；仅列出靶点可用动作。注意与 discover-report 的 suggested_action 词汇差异：发现层用语义名 skip_insn，注入层用引擎枚举 skip）。",
+          "examples": ["flip_reg_bits", "skip"]
+        },
+        "trigger_hint": {
+          "type": "object",
+          "description": "触发建议（与 param-mapping.md 的映射口径一致）：触发模式 + 估算触发序号；不给则省略。",
+          "required": ["mode", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["pc", "seq", "cycle_estimate", "every"],
+              "description": "触发模式（同 sim-trace fault_event.trigger.mode）。",
+              "examples": ["seq"]
+            },
+            "value": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "触发值（seq=指令序号，pc=地址，cycle_estimate=周期数，every=间隔）。",
+              "examples": [12000, "unknown"]
+            }
+          },
+          "examples": [{ "mode": "seq", "value": 12000 }]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该靶点结论的证据等级（未试运行前通常 hypothesis）。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "addr": 8236,
+          "insn": "lw a0, 12(sp)",
+          "expected_undesired_effect": "读回长度字段被翻转 → 后续边界检查走错误出口",
+          "rationale": "该 load 是写入长度校验的唯一数据来源",
+          "evidence_ref": "ev-003",
+          "suggested_action": "flip_reg_bits",
+          "trigger_hint": { "mode": "seq", "value": 12000 },
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "evidence_ref": {
+      "type": "object",
+      "description": "一条证据登记项（id 唯一；被调用链/入口/靶点引用）。",
+      "required": ["id", "kind", "locator", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^ev-[a-z0-9][a-z0-9-]*$",
+          "description": "证据稳定 ID（形如 ev-001）。",
+          "examples": ["ev-001"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["artifact", "artifact_derived", "simulation", "measurement", "public_doc", "public_secondary", "inference", "unknown"],
+          "description": "证据种类（与 Chip Profile 的来源 kind 词汇对齐）：artifact=镜像本体；artifact_derived=对镜像的静态分析产出；simulation=仿真动态观测；measurement=实机测量；public_*/inference=旁证（最高 hypothesis）。",
+          "examples": ["artifact_derived", "simulation"]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "description": "证据定位（文件 + 偏移/行号，或可重放命令）。",
+          "examples": ["fi discover chain --feature isp_write（可重放命令）"]
+        },
+        "detail": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "证据内容摘要。",
+          "examples": ["从镜像入口递归下降得到的调用边"]
+        },
+        "sha256": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "证据载体指纹（镜像/轨迹文件 SHA-256）；不适用写 unknown。",
+          "examples": ["unknown"]
+        },
+        "verification": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "可重放验证命令。",
+          "examples": ["python -m fi.discover.chain --image <bin> --base <addr>"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该证据本身的可靠度等级。",
+          "examples": ["observation", "hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "id": "ev-001",
+          "kind": "artifact_derived",
+          "locator": "fi discover chain --feature isp_write（可重放命令）",
+          "detail": "从镜像入口递归下降得到的调用边",
+          "sha256": "unknown",
+          "verification": "python -m fi.discover.chain --image <bin> --base <addr>",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "unknown_item": {
+      "type": "object",
+      "description": "显式未知项（问什么、缺什么材料、阻塞哪条结论、下一步探测）。",
+      "required": ["topic", "description", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": {
+          "type": "string",
+          "minLength": 1,
+          "description": "未知主题（短名）。",
+          "examples": ["命令通道帧格式"]
+        },
+        "description": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "未知内容说明。",
+          "examples": ["write 请求的帧头与长度字段布局未确认"]
+        },
+        "needed_material": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "解决该未知所需的材料/观测。",
+          "examples": ["公开协议文档或仿真观测到的完整帧"]
+        },
+        "blocks": {
+          "type": "array",
+          "description": "被该未知阻塞的结论定位（JSON Pointer 或自然语言路径）。空数组=不阻塞具体条目。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["injection_targets[0]", "call_chain[1].conditions"]]
+        },
+        "suggested_probe": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "下一步探测手段。",
+          "examples": ["以最小请求试运行并抓 UART 原始字节"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "unknown",
+          "description": "未知项的证据等级恒为 unknown（防止把未解决项包装成 hypothesis 结论）。",
+          "examples": ["unknown"]
+        }
+      },
+      "examples": [
+        {
+          "topic": "命令通道帧格式",
+          "description": "write 请求的帧头与长度字段布局未确认",
+          "needed_material": "公开协议文档或仿真观测到的完整帧",
+          "blocks": ["injection_targets[0]"],
+          "suggested_probe": "以最小请求试运行并抓 UART 原始字节",
+          "confidence": "unknown"
+        }
+      ]
+    }
+  }
+}

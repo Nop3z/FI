@@ -1,0 +1,53 @@
+{
+ "base": "0x80000000",
+ "size_bytes": 14336,
+ "reset_vector": "0x80000000",
+ "trap_handler": "0x80000200",
+ "table_addr": "0x80001000",
+ "dispatcher": "0x80002000",
+ "command_count": 7,
+ "commands": [
+  {
+   "cmd": "0x01",
+   "flag": 1,
+   "handler": "0x80003000",
+   "code": "0x0a01"
+  },
+  {
+   "cmd": "0x02",
+   "flag": 1,
+   "handler": "0x80003100",
+   "code": "0x0b02"
+  },
+  {
+   "cmd": "0x07",
+   "flag": 1,
+   "handler": "0x80003200",
+   "code": "0x0c03"
+  },
+  {
+   "cmd": "0x0b",
+   "flag": 1,
+   "handler": "0x80003300",
+   "code": "0x0d04"
+  },
+  {
+   "cmd": "0x15",
+   "flag": 1,
+   "handler": "0x80003400",
+   "code": "0x0e05"
+  },
+  {
+   "cmd": "0x2a",
+   "flag": 0,
+   "handler": "0x80003500",
+   "code": "0x0f06"
+  },
+  {
+   "cmd": "0x7e",
+   "flag": 1,
+   "handler": "0x80003600",
+   "code": "0x1007"
+  }
+ ]
+}

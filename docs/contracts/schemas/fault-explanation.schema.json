@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/fault-explanation.schema.json",
+  "title": "FaultExplanation v0.3（观测反解：从看到的寄存器差异反推被打坏的指令）",
+  "description": "承载『为什么会产生这个观测』：给定观测到的寄存器差异 + 执行前状态，反推能解释该观测的损坏指令候选集合。对应方法论 docs/methodology-fault-effect-reasoning.md 步骤 7（仿真复现解释）。**两条硬约束**：(1) confidence 恒为 hypothesis——候选解释不是已证实机理，禁止 fact；(2) **必须允许多解并全部列出**：多个损坏指令可能产生同一观测，只报一个会误导结论（summary.multiple_solutions=true 时 candidates 至少 2 条，schema + 语义校验双强制）；(3) candidates 为空时必须给 reason（『无可解释候选』本身是有价值的结论，但不能静默）。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "observation",
+    "pre_state",
+    "candidates",
+    "summary",
+    "confidence",
+    "evidence_kind"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "report_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本报告唯一 ID。",
+      "examples": ["fx-20261109-0001"]
+    },
+
+    "observation": {
+      "type": "object",
+      "description": "观测输入（Captured State 侧）：观测到的寄存器值与 PC。**这是硬件/数据源的观测，不是仿真结果**。",
+      "required": ["regs"],
+      "additionalProperties": false,
+      "properties": {
+        "regs": {
+          "type": "object",
+          "description": "观测到的寄存器值（键为 ABI 名，值为 uint）；只列关心的寄存器即可。",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "examples": [{ "a0": 553648260, "a6": 119 }]
+        },
+        "pc": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "观测到的 PC；不可得写 unknown。",
+          "examples": [553648260, "unknown"]
+        },
+        "source": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "观测来源（CSV 行/捕获文件/仿真运行件路径）。",
+          "examples": ["<DATASET>.csv#row=42", "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "观测本身的证据等级（真实采集=observation；由报告转述=hypothesis）。",
+          "examples": ["observation"]
+        }
+      },
+      "examples": [
+        {
+          "regs": { "a0": 553648260, "a6": 119 },
+          "pc": 553648260,
+          "source": "<DATASET>.csv#row=42",
+          "confidence": "observation"
+        }
+      ]
+    },
+
+    "pre_state": {
+      "type": "object",
+      "description": "执行前状态（Reconstructed State 侧）：反解所需的前置寄存器值。来源必须可解释，未知寄存器显式 unknown。",
+      "required": ["regs"],
+      "additionalProperties": false,
+      "properties": {
+        "regs": {
+          "type": "object",
+          "description": "执行前寄存器值（键为 ABI 名，值为 uint 或 \"unknown\"）；未知值不得猜 0。",
+          "additionalProperties": {
+            "anyOf": [
+              { "type": "integer", "minimum": 0 },
+              { "$ref": "common.defs.json#/$defs/unknown_string" }
+            ]
+          },
+          "examples": [{ "a0": 553648256, "a6": "unknown" }]
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["captured", "reconstructed", "simulated", "assumed", "unknown"],
+          "description": "前置状态来源：captured=真实捕获；reconstructed=由轨迹/栈推导；simulated=仿真回放；assumed=假设值（此时依赖该值的候选必须降级标注）；unknown=未声明。",
+          "examples": ["reconstructed", "assumed"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "前置状态的证据等级（reconstructed/assumed ⇒ hypothesis/unknown）。",
+          "examples": ["hypothesis", "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "regs": { "a0": 553648256, "a6": "unknown" },
+          "origin": "reconstructed",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "target_insn": {
+      "type": "object",
+      "description": "被反解的候选指令（原始未损坏形态）；省略表示『未指定目标指令，做全枚举反解』。",
+      "additionalProperties": false,
+      "properties": {
+        "bytes_hex": {
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{2})+$",
+          "description": "原始指令机器码（hex）。",
+          "examples": ["13051700"]
+        },
+        "addr": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "指令执行地址。",
+          "examples": [553648260, "unknown"]
+        },
+        "disasm": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "原始指令反汇编。",
+          "examples": ["addi a0, a0, 1", "unknown"]
+        }
+      },
+      "examples": [
+        { "bytes_hex": "13051700", "addr": 553648260, "disasm": "addi a0, a0, 1" }
+      ]
+    },
+
+    "physical_assumption": {
+      "type": "object",
+      "description": "物理假设（翻转方向/最大位数），与 fault-effect 契约同口径。",
+      "required": ["flip_mode", "max_flips", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "flip_mode": {
+          "type": "string",
+          "enum": ["one_to_zero", "zero_to_one", "both"],
+          "description": "翻转方向假设。",
+          "examples": ["one_to_zero", "both"]
+        },
+        "max_flips": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "反解枚举的最大同时翻转位数。",
+          "examples": [4]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "物理假设置信级别恒为 hypothesis。",
+          "examples": ["hypothesis"]
+        },
+        "note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "假设说明。",
+          "examples": ["crowbar-to-ground 常见效果：1→0"]
+        }
+      },
+      "examples": [
+        { "flip_mode": "one_to_zero", "max_flips": 4, "confidence": "hypothesis", "note": "1→0" }
+      ]
+    },
+
+    "candidates": {
+      "type": "array",
+      "description": "能解释该观测的候选清单（**多解全部列出**；顺序按 match_score 降序）。空数组时必须给 reason。",
+      "items": { "$ref": "#/$defs/candidate" },
+      "examples": [
+        [
+          {
+            "flipped_bit_positions": [0],
+            "mutated_insn": "addi a0, a0, 2",
+            "mutated_code_hex": "12051700",
+            "predicted_regs": { "a0": 553648258 },
+            "match_score": 1.0,
+            "match_detail": "unknown",
+            "confidence": "hypothesis"
+          }
+        ]
+      ]
+    },
+
+    "reason": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "candidates 为空的原因（如『全部变体求值不支持』『无变体能复现观测』）；非空时写 unknown。",
+      "examples": ["无变体能复现观测（求值层不支持该指令形态，需仿真验证）", "unknown"]
+    },
+
+    "simulation_verification": {
+      "type": "object",
+      "description": "仿真验证结果（Simulated State 侧）：对候选逐个真实执行，看谁能复现观测。未做仿真时 executed=false 并说明。",
+      "required": ["executed"],
+      "additionalProperties": false,
+      "properties": {
+        "executed": {
+          "type": "boolean",
+          "description": "是否已做仿真验证。",
+          "examples": [true, false]
+        },
+        "matches_observation": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "仿真是否复现观测（全部候选无一复现 → false；未做 → unknown）。",
+          "examples": [true, false, "unknown"]
+        },
+        "exception": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "仿真期间的异常（损坏成非法指令/非法访存时异常本身是有效结论）；无异常写 unknown。",
+          "examples": ["invalid instruction (code=4)", "unknown"]
+        },
+        "n_variants_tested": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "参与仿真的变体数。",
+          "examples": [21, "unknown"]
+        },
+        "n_matched": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "仿真复现观测的变体数。",
+          "examples": [2, "unknown"]
+        },
+        "engine": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "仿真引擎标识（如 unicorn-2.1.4）；未做仿真写 unknown。",
+          "examples": ["unicorn-2.1.4", "unknown"]
+        },
+        "discipline": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "仿真验证的边界声明（仿真≠实测）。",
+          "examples": ["仿真复现只说明在该模型下成立，不等于硬件机理已证实"]
+        }
+      },
+      "examples": [
+        {
+          "executed": true,
+          "matches_observation": true,
+          "exception": "unknown",
+          "n_variants_tested": 21,
+          "n_matched": 2,
+          "engine": "unicorn-2.1.4",
+          "discipline": "仿真复现 ≠ 硬件机理已证实"
+        }
+      ]
+    },
+
+    "summary": {
+      "type": "object",
+      "description": "反解汇总（含**多解标志**）。",
+      "required": ["multiple_solutions", "n_candidates"],
+      "additionalProperties": false,
+      "properties": {
+        "multiple_solutions": {
+          "type": "boolean",
+          "description": "是否存在多解（true ⇒ candidates.length ≥ 2，schema 强制）。**UI 必须显示『多解』标识**：多解时不得只展示第一条。",
+          "examples": [true, false]
+        },
+        "n_candidates": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "候选数。",
+          "examples": [2]
+        },
+        "n_variants_considered": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "枚举的变体总数（覆盖范围声明）。",
+          "examples": [21, "unknown"]
+        },
+        "n_variants_unsupported": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "求值层不支持的变体数（需交仿真器精算，属覆盖缺口）。",
+          "examples": [3, "unknown"]
+        },
+        "best_match_score": {
+          "$ref": "common.defs.json#/$defs/number_or_unknown",
+          "description": "最高匹配分（0-1；1=完全复现观测）。",
+          "examples": [1.0, "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "multiple_solutions": true,
+          "n_candidates": 2,
+          "n_variants_considered": 21,
+          "n_variants_unsupported": 3,
+          "best_match_score": 1.0
+        }
+      ]
+    },
+
+    "discipline": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "纪律声明（随契约交付）。",
+      "examples": ["多解全部列出，不得只报一个；候选需仿真/实测验证"]
+    },
+
+    "confidence": {
+      "type": "string",
+      "const": "hypothesis",
+      "description": "报告整体置信级别恒为 hypothesis（候选解释，非已证实机理）。禁止 fact/observation。",
+      "examples": ["hypothesis"]
+    },
+
+    "evidence_kind": {
+      "type": "string",
+      "enum": ["artifact", "artifact_derived", "simulation"],
+      "description": "证据来源种类：artifact=取自镜像/观测原始数据；artifact_derived=静态分析推导；simulation=含仿真验证。",
+      "examples": ["artifact_derived", "simulation"]
+    },
+
+    "generated_at": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "生成时刻。",
+      "examples": ["2026-11-09T22:50:00+08:00", "unknown"]
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "不变量 1：candidates 为空 ⇒ 必须给 reason（『无可解释候选』要有解释，不能静默）。",
+      "if": { "properties": { "candidates": { "maxItems": 0 } }, "required": ["candidates"] },
+      "then": { "required": ["reason"] }
+    },
+    {
+      "description": "不变量 2：summary.multiple_solutions=true ⇒ candidates 至少 2 条（多解就必须真列出多条）。",
+      "if": {
+        "properties": {
+          "summary": {
+            "properties": { "multiple_solutions": { "const": true } },
+            "required": ["multiple_solutions"]
+          }
+        },
+        "required": ["summary"]
+      },
+      "then": { "properties": { "candidates": { "minItems": 2 } } }
+    },
+    {
+      "description": "不变量 3：report 级 confidence 不可能是 fact——schema 已 const hypothesis，此处再锁 evidence_kind 与 falsification 一致性留给语义层。",
+      "properties": { "confidence": { "const": "hypothesis" } }
+    }
+  ],
+
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "description": "一个能解释观测的候选（损坏指令 + 预测寄存器 + 匹配分）。",
+      "required": ["flipped_bit_positions", "predicted_regs", "match_score", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "flipped_bit_positions": {
+          "type": "array",
+          "description": "该候选假设翻转的位位置（LSB=0 起算）。",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 0 },
+          "examples": [[0], [3, 11]]
+        },
+        "mutated_insn": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "损坏后的指令反汇编；无法解码写 unknown。",
+          "examples": ["addi a0, a0, 2", "unknown"]
+        },
+        "mutated_code_hex": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "损坏后的机器码（hex）；未知写 unknown。",
+          "examples": ["12051700", "unknown"]
+        },
+        "change_kind": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "语义变化类别（同 fault-effect 契约的 change_kind 枚举）；未判定写 unknown。",
+          "examples": ["imm_changed", "unknown"]
+        },
+        "predicted_regs": {
+          "type": "object",
+          "description": "该候选预测的执行后寄存器值（键为 ABI 名，值为 uint 或 \"unknown\"）。",
+          "additionalProperties": {
+            "anyOf": [
+              { "type": "integer", "minimum": 0 },
+              { "$ref": "common.defs.json#/$defs/unknown_string" }
+            ]
+          },
+          "examples": [{ "a0": 553648258 }]
+        },
+        "match_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "与观测的匹配程度（1=完全一致；多解时按此排序）。",
+          "examples": [1.0, 0.5]
+        },
+        "match_detail": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "逐寄存器比对细节（如 {a0: {observed, predicted}}）；未细算写 unknown。",
+          "examples": [{ "a0": { "observed": "0x<ADDR>", "predicted": "0x<ADDR>" } }, "unknown"]
+        },
+        "eval_status": {
+          "type": "string",
+          "enum": ["ok", "unsupported", "undecodable", "unknown"],
+          "description": "候选求值状态：ok=已求值；unsupported=求值层不支持该形态（需仿真精算）；undecodable=无法解码；unknown=未声明。",
+          "examples": ["ok", "unsupported"]
+        },
+        "simulation": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "该候选的仿真验证结果（{executed, matches_observation, exception, regs_after}）；未做仿真写 unknown。",
+          "examples": [
+            {
+              "executed": true,
+              "matches_observation": true,
+              "exception": "unknown",
+              "regs_after": { "a0": 553648258 }
+            },
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "单条候选置信级别恒为 hypothesis。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "flipped_bit_positions": [0],
+          "mutated_insn": "addi a0, a0, 2",
+          "mutated_code_hex": "12051700",
+          "change_kind": "imm_changed",
+          "predicted_regs": { "a0": 553648258 },
+          "match_score": 1.0,
+          "match_detail": "unknown",
+          "eval_status": "ok",
+          "simulation": "unknown",
+          "confidence": "hypothesis"
+        }
+      ]
+    }
+  }
+}

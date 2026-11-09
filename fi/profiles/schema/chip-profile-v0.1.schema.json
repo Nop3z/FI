@@ -1,0 +1,388 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "fi:chip-profile:v0.1",
+  "title": "FI Chip Profile v0.1",
+  "description": "统一芯片画像格式。核心约定：除结构键（id/status/question 等元数据）外，一切语义字段必须为 claim 形状 {value, evidence}；evidence.confidence ∈ fact|hypothesis|unknown。本 schema 只管结构与形状，语义约束（fact 必须有来源、unknown 必须空值等）由 fi.profiles.validate 执行。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "profile_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "title": { "type": "string" },
+    "status": { "enum": ["draft", "review", "validated"] },
+    "revision": { "type": "string" },
+    "updated": { "type": "string" },
+    "maintainer": { "type": "string" },
+
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source" }
+    },
+
+    "chip": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/claim" },
+        "vendor": { "$ref": "#/$defs/claim" },
+        "family": { "$ref": "#/$defs/claim" },
+        "part_number": { "$ref": "#/$defs/claim" },
+        "package": { "$ref": "#/$defs/claim" }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+
+    "architecture": {
+      "type": "object",
+      "properties": {
+        "isa_family": { "$ref": "#/$defs/claim" },
+        "xlen": { "$ref": "#/$defs/claim" },
+        "extensions": { "$ref": "#/$defs/claim" },
+        "privilege_modes": { "$ref": "#/$defs/claim" },
+        "core": { "$ref": "#/$defs/claim" },
+        "bus": { "$ref": "#/$defs/claim" },
+        "notes": { "$ref": "#/$defs/claim" }
+      },
+      "required": ["isa_family", "xlen", "extensions", "privilege_modes"],
+      "additionalProperties": false
+    },
+
+    "exception": {
+      "type": "object",
+      "properties": {
+        "mechanism": { "$ref": "#/$defs/claim" },
+        "entry": {
+          "type": "object",
+          "properties": {
+            "csr": { "$ref": "#/$defs/claim" },
+            "mode": { "$ref": "#/$defs/claim" },
+            "base": { "$ref": "#/$defs/claim" }
+          },
+          "required": ["csr", "mode"],
+          "additionalProperties": false
+        },
+        "delegation": { "$ref": "#/$defs/claim" },
+        "context": {
+          "type": "object",
+          "properties": {
+            "source": { "$ref": "#/$defs/claim" },
+            "stack": { "$ref": "#/$defs/claim" },
+            "layout": { "$ref": "#/$defs/claim" },
+            "registers_saved": { "$ref": "#/$defs/claim" },
+            "csrs_read": { "$ref": "#/$defs/claim" }
+          },
+          "required": ["source", "layout"],
+          "additionalProperties": false
+        },
+        "interrupt_sources": { "$ref": "#/$defs/claim" }
+      },
+      "required": ["mechanism", "entry", "context"],
+      "additionalProperties": false
+    },
+
+    "boot": {
+      "type": "object",
+      "properties": {
+        "reset_vector": { "$ref": "#/$defs/claim" },
+        "boot_modes": { "$ref": "#/$defs/claim" },
+        "watchdog": { "$ref": "#/$defs/claim" }
+      },
+      "required": ["reset_vector"],
+      "additionalProperties": false
+    },
+
+    "memory_map": {
+      "type": "object",
+      "properties": {
+        "regions": { "$ref": "#/$defs/claimRegions" }
+      },
+      "required": ["regions"],
+      "additionalProperties": false
+    },
+
+    "csr_table": {
+      "type": "object",
+      "properties": {
+        "entries": { "$ref": "#/$defs/claimCsrEntries" }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
+
+    "error_codes": {
+      "type": "object",
+      "properties": {
+        "channel": { "$ref": "#/$defs/claim" },
+        "entries": { "$ref": "#/$defs/claimErrorEntries" }
+      },
+      "required": ["channel", "entries"],
+      "additionalProperties": false
+    },
+
+    "capture": {
+      "type": "object",
+      "properties": {
+        "trap": { "$ref": "#/$defs/claim" },
+        "crash_dump": { "$ref": "#/$defs/claim" },
+        "debug": { "$ref": "#/$defs/claim" },
+        "trace": { "$ref": "#/$defs/claim" },
+        "external": { "$ref": "#/$defs/claim" },
+        "reset": { "$ref": "#/$defs/claim" }
+      },
+      "required": ["trap", "crash_dump", "debug", "trace", "external", "reset"],
+      "additionalProperties": false
+    },
+
+    "peripherals": {
+      "type": "object",
+      "properties": {
+        "entries": { "$ref": "#/$defs/claimPeriphEntries" }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
+
+    "observations": {
+      "type": "object",
+      "properties": {
+        "entries": { "$ref": "#/$defs/claimObservEntries" }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
+
+    "injection_targets": {
+      "type": "object",
+      "description": "可注入靶点（自动发现产出，全部 hypothesis）。定位：从『打中了哪条指令』升级为『这条指令被打坏后变成什么、为什么产生该观测』（docs/methodology-fault-effect-reasoning.md）。本节的 claim 只能来自 artifact_derived 级自动分析，禁止写 fact。",
+      "properties": {
+        "entries": {
+          "type": "object",
+          "properties": {
+            "value": { "type": "array", "items": { "$ref": "#/$defs/injectionTarget" } },
+            "evidence": { "$ref": "#/$defs/evidence" }
+          },
+          "required": ["value", "evidence"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
+
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "question": { "type": "string", "minLength": 1 },
+          "target_field": { "type": "string", "minLength": 1 },
+          "needed_material": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["open", "answered"], "default": "open" }
+        },
+        "required": ["id", "question", "target_field", "needed_material"],
+        "additionalProperties": false
+      }
+    },
+
+    "notes": { "type": "string" },
+
+    "generated_by": { "type": "string", "minLength": 1, "description": "自动生成工具（名 + 版本），如 'fi.discover.draft 0.1.0'。语义不变量：非空 ⇒ status 必须为 draft（自动草稿不得冒充已验证画像）" },
+    "generated_at": { "type": "string", "minLength": 1, "description": "自动生成时间（ISO 8601）" },
+    "generated_from": { "type": "object", "description": "自动生成的输入溯源（镜像路径/指纹/基址等），自由对象" }
+  },
+  "required": [
+    "schema_version", "profile_id", "title", "status", "sources",
+    "chip", "architecture", "exception", "boot", "memory_map",
+    "csr_table", "error_codes", "capture", "peripherals", "open_questions"
+  ],
+  "additionalProperties": false,
+
+  "$defs": {
+    "confidence": { "enum": ["fact", "hypothesis", "unknown"] },
+
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "source": { "type": ["string", "null"], "pattern": "^S\\d+$", "description": "指向顶层 sources[].id；无来源时为 null（仅允许 unknown 级）" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "note": { "type": "string", "description": "hypothesis 必填：写明推理链/旁证关系；fact 建议写交叉印证" },
+        "verification": { "type": "string", "description": "可重放命令或实验编号（fact 级强烈建议）" }
+      },
+      "required": ["confidence"],
+      "additionalProperties": false
+    },
+
+    "claim": {
+      "type": "object",
+      "properties": {
+        "value": {},
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "required": ["value", "evidence"],
+      "additionalProperties": false
+    },
+
+    "source": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^S\\d+$" },
+        "kind": {
+          "enum": [
+            "user_confirmed",
+            "internal_document",
+            "artifact",
+            "artifact_derived",
+            "measurement",
+            "public_doc",
+            "public_secondary",
+            "article_archive",
+            "inference",
+            "pending"
+          ],
+          "description": "user_confirmed/internal_document/artifact/artifact_derived/measurement 可支撑 fact；public_* / article_archive / inference 只能支撑 hypothesis；pending 只能搭配 unknown"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "locator": { "type": "string", "minLength": 1, "description": "具体到文件路径/页码/章节/URL/确认会话日期" },
+        "date": { "type": "string" },
+        "trust": { "enum": ["high", "medium", "low"], "description": "公开类来源必须标注可信度" }
+      },
+      "required": ["id", "kind", "title", "locator"],
+      "additionalProperties": false
+    },
+
+    "region": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "name": { "$ref": "#/$defs/claim" },
+        "type": { "$ref": "#/$defs/claim", "description": "value ∈ rom|flash|xip|ram|tcm|retained|mmio|efuse|other" },
+        "base": { "$ref": "#/$defs/claim", "description": "value 为十六进制字符串（含 0x 前缀），具体值只能出现在实例 Profile 中" },
+        "size_bytes": { "$ref": "#/$defs/claim" },
+        "access": { "$ref": "#/$defs/claim", "description": "value 如 r / rx / rw / rw-alias" },
+        "aliases": { "$ref": "#/$defs/claim", "description": "同一物理区域的多别名映射，如 [\"0x22020000\",\"0x42020000\"]" },
+        "description": { "$ref": "#/$defs/claim" }
+      },
+      "required": ["id", "name", "type", "base", "size_bytes"],
+      "additionalProperties": false
+    },
+
+    "csrEntry": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "address": { "$ref": "#/$defs/claim", "description": "十六进制字符串" },
+        "name": { "$ref": "#/$defs/claim" },
+        "kind": { "$ref": "#/$defs/claim", "description": "value ∈ standard|custom；未知时 value 置 null（不得写字符串 unknown）" },
+        "semantics": { "$ref": "#/$defs/claim" },
+        "reset_value": { "$ref": "#/$defs/claim" },
+        "observed_accesses": { "$ref": "#/$defs/claim", "description": "仿真/实测中观察到的读写记录" }
+      },
+      "required": ["id", "address", "name", "kind", "semantics"],
+      "additionalProperties": false
+    },
+
+    "errorEntry": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "code": { "$ref": "#/$defs/claim", "description": "十六进制字符串" },
+        "meaning": { "$ref": "#/$defs/claim" },
+        "observed": { "$ref": "#/$defs/claim", "description": "CSV/实测中的出现统计" },
+        "context": { "$ref": "#/$defs/claim", "description": "出现时的实验语境（state、参数窗口等）" }
+      },
+      "required": ["id", "code", "meaning"],
+      "additionalProperties": false
+    },
+
+    "periphEntry": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "name": { "$ref": "#/$defs/claim" },
+        "base": { "$ref": "#/$defs/claim", "description": "十六进制字符串" },
+        "irq": { "$ref": "#/$defs/claim" },
+        "summary": { "$ref": "#/$defs/claim" },
+        "model_notes": { "$ref": "#/$defs/claim", "description": "仿真后端建模要点（寄存器行为、读响应约定等）" }
+      },
+      "required": ["id", "name", "base", "irq", "summary"],
+      "additionalProperties": false
+    },
+
+    "obsEntry": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "statement": { "$ref": "#/$defs/claim", "description": "观测陈述（只描述观察到了什么）" },
+        "conditions": { "$ref": "#/$defs/claim", "description": "观测成立的前提条件/假设（如仿真基址假设）" }
+      },
+      "required": ["id", "statement", "conditions"],
+      "additionalProperties": false
+    },
+
+    "claimRegions": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/$defs/region" } },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "required": ["value", "evidence"],
+      "additionalProperties": false
+    },
+    "claimCsrEntries": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/$defs/csrEntry" } },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "required": ["value", "evidence"],
+      "additionalProperties": false
+    },
+    "claimErrorEntries": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/$defs/errorEntry" } },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "required": ["value", "evidence"],
+      "additionalProperties": false
+    },
+    "claimPeriphEntries": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/$defs/periphEntry" } },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "required": ["value", "evidence"],
+      "additionalProperties": false
+    },
+    "claimObservEntries": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/$defs/obsEntry" } },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "required": ["value", "evidence"],
+      "additionalProperties": false
+    },
+
+    "injectionTarget": {
+      "type": "object",
+      "description": "单个注入靶点：码装载指令 + 位翻转变体 + 建议动作 + 预期观测。全部语义字段为 claim（hypothesis）。",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "kind": { "$ref": "#/$defs/claim", "description": "value ∈ error_code_load | gating_branch | ...（targets.py 的靶点类别）" },
+        "code": { "$ref": "#/$defs/claim", "description": "该靶点关联的错误码/命令码（十六进制字符串）" },
+        "command": { "$ref": "#/$defs/claim", "description": "命令号（十六进制字符串）或 null" },
+        "handler": { "$ref": "#/$defs/claim", "description": "handler 入口地址（十六进制字符串）" },
+        "addr": { "$ref": "#/$defs/claim", "description": "靶点指令地址（十六进制字符串）" },
+        "insn": { "$ref": "#/$defs/claim", "description": "靶点指令反汇编文本" },
+        "insn_bytes": { "$ref": "#/$defs/claim", "description": "靶点指令机器码（小端 hex）" },
+        "bitflip_variants": { "$ref": "#/$defs/claim", "description": "位翻转变体摘要（按变化类别与码迁移聚合；自由对象）" },
+        "suggested_action": { "$ref": "#/$defs/claim", "description": "建议注入动作 {primary, alternative, negative_control}" },
+        "expected_observation": { "$ref": "#/$defs/claim", "description": "预期观测变化（静态推演，未验证）" }
+      },
+      "required": ["id", "kind", "addr", "insn", "suggested_action", "expected_observation"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/tts-metrics.schema.json",
+  "title": "TTSMetrics v0.3（芯片接入耗时与吞吐指标）",
+  "description": "TTS（Time-To-Simulate）指标实例：单芯片一次接入的耗时账 + 吞吐账，供跨芯片对比与 UI 效率看板消费（指标定义见 docs/tts-baseline.md §3）。纪律：全部数值必须可重放核对——tts_a_minutes/tts_b_minutes 必须给 measured_at 与 basis（人工记账 or 工具计时），instr_per_sec/bytes_per_instr 必须给 measured_user（仿真运行标识或轨迹文件），缺失写 \"unknown\"，禁止 0 冒充。注意：本契约当前为**待定稿**状态（lead 2026-11-09：先等逆向跑通再定口径），字段变更仍须进 CHANGELOG。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "chip_id",
+    "tts_a_minutes",
+    "tts_b_minutes",
+    "instr_per_sec",
+    "bytes_per_instr",
+    "iterations_to_converge",
+    "measured_at",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "chip_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "芯片稳定 ID（与 Chip Profile 的 profile_id 同一命名空间，便于跨芯片对比与关联引用）。",
+      "examples": ["target-chip", "sample-chip"]
+    },
+
+    "chip_ref": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "关联的 Chip Profile 引用（profile_id）；尚未生成 Profile 时写 unknown。",
+      "examples": ["target-chip", "unknown"]
+    },
+
+    "tts_a_minutes": {
+      "description": "TTS-A 自动接入耗时（分钟）：从『只有固件 bin（+可选基址）』到『产出可运行仿真配置 + Profile 草稿 + 首条轨迹』。自动化目标见 docs/tts-baseline.md §3（≤30 分钟）。可写数字或显式 unknown。",
+      "anyOf": [
+        { "type": "number", "minimum": 0 },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [12.5, "unknown"]
+    },
+
+    "tts_b_minutes": {
+      "description": "TTS-B 可信跑通耗时（分钟）：从 TTS-A 结束到『轨迹过 sim-trace 契约 + 停止原因分类明确 + 无静默伪造』。",
+      "anyOf": [
+        { "type": "number", "minimum": 0 },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [18.0, "unknown"]
+    },
+
+    "instr_per_sec": {
+      "description": "仿真吞吐（指令/秒）。目标 ≥ 1e6（docs/tts-baseline.md §3）。未实测写 unknown。",
+      "anyOf": [
+        { "type": "number", "exclusiveMinimum": 0 },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [1250000, "unknown"]
+    },
+
+    "bytes_per_instr": {
+      "description": "轨迹体积效率（字节/指令）。目标 ≤ 8 B/指令（采样/二进制模式）。未实测写 unknown。",
+      "anyOf": [
+        { "type": "number", "minimum": 0 },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [6.4, "unknown"]
+    },
+
+    "iterations_to_converge": {
+      "description": "收敛所需迭代轮数（补模型/调参重跑轮数，0 起不算首跑；定义随管线成熟可能细化）。",
+      "anyOf": [
+        { "type": "integer", "minimum": 0 },
+        { "$ref": "common.defs.json#/$defs/unknown_string" }
+      ],
+      "examples": [3, "unknown"]
+    },
+
+    "measured_at": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "测量时刻（ISO 8601 带时区）；无法获知写 unknown。",
+      "examples": ["2026-11-09T16:13:00+08:00", "unknown"]
+    },
+
+    "notes": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "备注：口径取舍、异常项、与基准的差异说明。",
+      "examples": ["首条轨迹 100 分钟为人工基准；本轮为管线自动产出"]
+    },
+
+    "basis": {
+      "type": "object",
+      "description": "测量依据（可重放核对）：耗时记账口径与吞吐测量来源。缺失整对象时省略。",
+      "additionalProperties": false,
+      "properties": {
+        "tts_accounting": {
+          "type": "string",
+          "enum": ["manual_log", "tool_timing", "mixed", "unknown"],
+          "description": "TTS-A/B 耗时口径：manual_log=人工记账（基线 §1 表）；tool_timing=工具自动计时；mixed=混合；unknown=未声明。",
+          "examples": ["tool_timing"]
+        },
+        "measured_user": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "吞吐测量的运行标识/轨迹文件路径（可重放核对）。",
+          "examples": ["run-20261109-000001", "examples/rom-simulation/runs/<date>/<label>/trace.jsonl", "unknown"]
+        },
+        "trace_level": {
+          "type": "string",
+          "enum": ["off", "binary", "sampled", "full", "unknown"],
+          "description": "吞吐测量所用轨迹级别（见 docs/contracts/trace-levels.md；不同级别吞吐不可直接比较）。",
+          "examples": ["sampled", "full", "unknown"]
+        },
+        "command": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "可重放命令。",
+          "examples": ["python -m fi.sim run --config <cfg> --trace-level=sampled"]
+        }
+      },
+      "examples": [
+        {
+          "tts_accounting": "tool_timing",
+          "measured_user": "run-20261109-000001",
+          "trace_level": "sampled",
+          "command": "python -m fi.sim run --config <cfg> --trace-level=sampled"
+        }
+      ]
+    },
+
+    "dashboard": {
+      "type": "object",
+      "description": "UI 效率看板展示字段（消费方只读；指标定义仍以本契约顶层字段为准）。",
+      "additionalProperties": false,
+      "properties": {
+        "baseline_chip_id": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "对比基准芯片 ID（如 target-chip 基准）；跨芯片比值计算用。",
+          "examples": ["target-chip", "unknown"]
+        },
+        "improvement_factor": {
+          "description": "相对基准的提升倍数（基准 TTS / 本芯片 TTS）。未计算写 unknown。",
+          "anyOf": [
+            { "type": "number", "exclusiveMinimum": 0 },
+            { "$ref": "common.defs.json#/$defs/unknown_string" }
+          ],
+          "examples": [8.0, "unknown"]
+        },
+        "milestones": {
+          "type": "array",
+          "description": "接入过程里程碑时间线（看板甘特/阶段条数据）。",
+          "items": {
+            "type": "object",
+            "required": ["label", "elapsed_minutes"],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "里程碑名。",
+                "examples": ["首条轨迹"]
+              },
+              "elapsed_minutes": {
+                "type": "number",
+                "minimum": 0,
+                "description": "自接入启动起算的分钟数。",
+                "examples": [12.5]
+              }
+            },
+            "examples": [{ "label": "首条轨迹", "elapsed_minutes": 12.5 }]
+          },
+          "examples": [
+            [
+              { "label": "配置生成", "elapsed_minutes": 3.0 },
+              { "label": "首条轨迹", "elapsed_minutes": 12.5 }
+            ]
+          ]
+        }
+      },
+      "examples": [
+        {
+          "baseline_chip_id": "target-chip",
+          "improvement_factor": 8.0,
+          "milestones": [{ "label": "首条轨迹", "elapsed_minutes": 12.5 }]
+        }
+      ]
+    }
+  }
+}

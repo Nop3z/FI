@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fi"
+version = "0.3.0"
+description = "FI - 通用 RISC-V 故障观测/异常捕获/上下文分析/指令级仿真工具集（CLI + JSON/JSONL 友好）"
+readme = "docs/contracts/README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "FI tech team" }]
+# 运行时唯一硬依赖：契约校验。保持最小化，仿真后端等重依赖由各实现包自行声明。
+dependencies = [
+    "jsonschema>=4.20",
+]
+
+[project.optional-dependencies]
+# 逆向先行（P0）与自动发现（P2）需要的反汇编能力：fi.discover.* 使用 capstone。
+discover = [
+    "capstone>=5.0",
+]
+# 仿真后端（fi.sim 实现侧）：unicorn 由 sim-engine 包声明，此处仅聚合便于一键安装。
+sim = [
+    "unicorn>=2.0",
+    "capstone>=5.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+fi = "fi.cli:main"
+
+[tool.setuptools]
+packages = [
+    "fi",
+    "fi.schemas",
+    "fi.providers",
+    "fi.loop",
+    "fi.sim",
+    "fi.analysis",
+    "fi.profiles",
+    "fi.discover",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

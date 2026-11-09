@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/chip-profile-index.schema.json",
+  "title": "ChipProfileIndex v0.1（引用约定）",
+  "description": "重要边界：ChipProfile 的内部格式（异常入口/寄存器保存/CSR/内存布局/证据管理等）由 chip-profile 专职定义并版本化，本契约不复制其字段。本文件只约定『其他契约与工具如何引用一个 Profile』——用 profile_id + index_path + format_version 三元组做稳定引用，消费方按 index_path 读取 chip-profile 交付的索引文件获取细节。",
+  "type": "object",
+  "required": ["schema_version", "profiles"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "profiles": {
+      "type": "array",
+      "description": "可引用的 Profile 注册表。条目形状与 fi.profiles.loader.YamlProfileStore.index() 导出对齐（2026-11-09 收编定稿）：运行时导出只需补 evidence_level（及建议补 index_path）即可装入本契约。",
+      "items": {
+        "type": "object",
+        "required": ["profile_id", "status", "evidence_level"],
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*$",
+            "description": "Profile 稳定短 ID（小写字母数字._-）。其余契约（FaultContext/AnalysisResult 等）通过该 ID 引用。",
+            "examples": ["target-chip"]
+          },
+          "index_path": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "指向该 Profile 数据文件的路径（相对仓库根；YamlProfileStore 约定 profiles/<profile_id>.yaml）。正式引用注册表应必填；运行时导出允许 unknown。",
+            "examples": ["profiles/target-chip.yaml", "unknown"]
+          },
+          "title": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "Profile 标题（YAML 顶层 title）。",
+            "examples": ["target-chip BootROM 芯片画像", "unknown"]
+          },
+          "format_version": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "Profile 数据格式的版本（chip-profile 契约的 schema 版本，当前 0.1）；未同步时写 unknown。",
+            "examples": ["0.1", "unknown"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "validated", "deprecated", "unknown"],
+            "description": "Profile 生命周期状态（YAML 顶层 status，由 chip-profile 专职维护）：draft=研究生成中（**含 fi discover draft 自动生成的草稿，未经任何验证**）；validated=通过验证记录；deprecated=已弃用；运行时导出的其他取值一律映射为 unknown。**draft 语义（v0.3 强制）**：(1) 草稿 Profile 不进入正式索引——YamlProfileStore.index() 与 validate --all 跳过 *.draft.yaml；(2) 若消费方确实拿到 status=draft 的条目（如显式导出草稿索引），**不得把它当已验证数据**：不得据此展示 fact 级结论、不得作为仿真配置的唯一依据、UI 必须打『草稿/未验证』标识；(3) 草稿的来源恒为 artifact_derived（自动分析产物），必须给出 generated_by；升级路径是人工/仿真/数据交叉验证后由 chip-profile 转出 fact 级 claim 并改 status。",
+            "examples": ["draft", "validated"]
+          },
+          "generated_by": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "草稿生成方标识（工具名+版本，如 fi.discover.draft 0.1.0）: 自动生成的草稿**必须**写具体值（禁 unknown），人工维护条目写 unknown。语义不变量（fi.schemas.invariants 强制）：generated_by 为具体值时 ⇒ status 必须 draft 且 source 必须 artifact_derived（草稿来源恒为自动分析产物；反过来草稿一旦通过验证，要么改 status，要么清空 generated_by）——用于回答『这份草稿是谁在哪一步自动生成的』并防止草稿被当成已验证数据引用。",
+            "examples": ["fi.discover.draft 0.1.0", "unknown"]
+          },
+          "source": {
+            "type": "string",
+            "enum": ["artifact", "artifact_derived", "user_confirmed", "measurement", "manual_curated", "unknown"],
+            "description": "条目内容的主要来源种类（与 Chip Profile 的 source kind 词汇对齐）：artifact=只读样例本体；artifact_derived=对本团队样例的自动/静态分析产出（**自动生成草稿恒为此值**）；user_confirmed=用户给定；measurement=实机测量；manual_curated=人工逆向整理的已验证内容；无法判定写 unknown。",
+            "examples": ["artifact_derived", "manual_curated", "unknown"]
+          },
+          "revision": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "Profile 修订号（YAML 顶层 revision）。",
+            "examples": ["r1", "unknown"]
+          },
+          "updated": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "最后更新日期（YAML 顶层 updated，ISO 日期）。",
+            "examples": ["2026-11-09", "unknown"]
+          },
+          "valid": {
+            "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+            "description": "该 Profile 是否通过 chip-profile 校验器（fi.profiles.loader.validate_profile）；未校验写 unknown。",
+            "examples": [true, "unknown"]
+          },
+          "stats": {
+            "$ref": "common.defs.json#/$defs/object_or_unknown",
+            "description": "claim 证据统计（fact/hypothesis/unknown/total/open_questions 计数），形状由 chip-profile 契约维护。",
+            "examples": [
+              { "fact": 3, "hypothesis": 12, "unknown": 40, "total": 55, "open_questions": 8 },
+              "unknown"
+            ]
+          },
+          "error": {
+            "$ref": "common.defs.json#/$defs/string_or_unknown",
+            "description": "导出异常信息（如文件不可读 unreadable）；正常条目写 unknown。",
+            "examples": ["unknown", "unreadable"]
+          },
+          "evidence_level": {
+            "$ref": "common.defs.json#/$defs/evidence_level",
+            "description": "本引用条目的证据分级（必填）。注意它只表示『引用关系/索引信息』本身的可靠性，不代表 Profile 内容的证据水平（那是 valid/stats/Profile 自身 evidence 的职责）。",
+            "examples": ["observation"]
+          },
+          "source_of_truth": {
+            "type": "string",
+            "const": "chip-profile-contract",
+            "description": "格式单一事实来源常量：chip-profile 专职契约。防止有人在本契约里私加 Profile 内部字段。",
+            "examples": ["chip-profile-contract"]
+          }
+        },
+        "examples": [
+          {
+            "profile_id": "target-chip",
+            "index_path": "profiles/target-chip.yaml",
+            "title": "target-chip BootROM 芯片画像",
+            "format_version": "0.1",
+            "status": "draft",
+            "generated_by": "unknown",
+            "source": "manual_curated",
+            "revision": "r1",
+            "updated": "2026-11-09",
+            "valid": true,
+            "stats": { "fact": 3, "hypothesis": 12, "unknown": 40, "total": 55, "open_questions": 8 },
+            "error": "unknown",
+            "evidence_level": "observation",
+            "source_of_truth": "chip-profile-contract"
+          },
+          {
+            "profile_id": "sample-chip",
+            "index_path": "profiles/sample-chip.draft.yaml",
+            "title": "自动生成草稿（未验证，仅供管线消费）",
+            "format_version": "0.1",
+            "status": "draft",
+            "generated_by": "fi.discover.draft 0.1.0",
+            "source": "artifact_derived",
+            "revision": "r0",
+            "updated": "2026-11-09",
+            "valid": false,
+            "stats": "unknown",
+            "error": "unknown",
+            "evidence_level": "hypothesis",
+            "source_of_truth": "chip-profile-contract"
+          }
+        ]
+      },
+      "examples": [
+        [
+          {
+            "profile_id": "target-chip",
+            "index_path": "profiles/target-chip.yaml",
+            "title": "target-chip BootROM 芯片画像",
+            "format_version": "0.1",
+            "status": "draft",
+            "generated_by": "unknown",
+            "source": "manual_curated",
+            "revision": "r1",
+            "updated": "2026-11-09",
+            "valid": true,
+            "stats": { "fact": 3, "hypothesis": 12, "unknown": 40, "total": 55, "open_questions": 8 },
+            "error": "unknown",
+            "evidence_level": "observation",
+            "source_of_truth": "chip-profile-contract"
+          }
+        ]
+      ]
+    },
+
+    "notes": {
+      "type": "string",
+      "description": "备注。target-chip 只能作为索引中的一条样例条目出现，禁止进通用代码默认值。",
+      "examples": ["target-chip 仅作首个验证样例，格式以 chip-profile 专职契约为准。"]
+    },
+
+    "draft_semantics": {
+      "type": "string",
+      "const": "draft-not-validated-v0.3",
+      "description": "草稿语义版本常量（v0.3 新增，可选）：出现即声明本索引文件遵循草稿语义约定——草稿 Profile 不进正式索引；若条目 status=draft，消费方不得当已验证数据使用（详见 docs/contracts/README.md §草稿语义）。",
+      "examples": ["draft-not-validated-v0.3"]
+    }
+  }
+}

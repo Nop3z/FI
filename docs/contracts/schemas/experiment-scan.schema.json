@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/experiment-scan.schema.json",
+  "title": "ExperimentScan v0.1",
+  "description": "参数窗口扫描汇总：闭环（fi.loop）一轮或多轮扫描的聚合视图。明细记录放 records_ref 指向的 JSONL（每行一个 CampaignRecord），本契约只承载汇总事实，语义解释交给 AnalysisResult。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "scan_id",
+    "window",
+    "records_ref",
+    "evidence_level"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "scan_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "扫描唯一 ID。",
+      "examples": ["scan-20261109-win01"]
+    },
+
+    "window": {
+      "type": "array",
+      "minItems": 1,
+      "description": "被扫描的参数窗口（每轴一项）。数值统一用原始刻度；换算 ns 需附 unit_assumption。",
+      "items": {
+        "type": "object",
+        "required": ["axis", "min_value", "max_value", "unit"],
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "type": "string",
+            "minLength": 1,
+            "description": "参数轴名（本批数据为 delay / pulse；泛化允许其他轴名）。",
+            "examples": ["delay", "pulse"]
+          },
+          "min_value": {
+            "type": "number",
+            "description": "窗口下界（含）。",
+            "examples": [2640]
+          },
+          "max_value": {
+            "type": "number",
+            "description": "窗口上界（含）。",
+            "examples": [3190]
+          },
+          "step_value": {
+            "description": "扫描步进；未定义写 unknown。",
+            "$ref": "common.defs.json#/$defs/uint_or_unknown",
+            "examples": [1, "unknown"]
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["raw", "ns", "unknown"],
+            "description": "数值单位。min/max 直接来自数据源写 raw；换算成 ns 须同步给 unit_assumption。",
+            "examples": ["raw", "ns", "unknown"]
+          }
+        },
+        "examples": [{ "axis": "delay", "min_value": 2640, "max_value": 3190, "step_value": 1, "unit": "raw" }]
+      },
+      "examples": [
+        [
+          { "axis": "delay", "min_value": 2640, "max_value": 3190, "step_value": 1, "unit": "raw" },
+          { "axis": "pulse", "min_value": 2, "max_value": 6, "step_value": "unknown", "unit": "raw" }
+        ]
+      ]
+    },
+
+    "unit_assumption": {
+      "description": "整窗单位换算假设；结构与 CampaignRecord.params.unit_assumption 相同。",
+      "$ref": "campaign-record.schema.json#/properties/params/properties/unit_assumption",
+      "examples": [{ "scale": "1 raw unit = 10 ns", "evidence_level": "hypothesis" }]
+    },
+
+    "records_ref": {
+      "type": "object",
+      "description": "明细记录引用：JSONL 文件，每行一个完整 CampaignRecord。",
+      "required": ["path", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "JSONL 路径（派生数据，另存，不覆盖原始 CSV）。",
+          "examples": ["data/derived/scan-20261109-win01.jsonl"]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "明细条数。",
+          "examples": [740209]
+        },
+        "checksum": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "JSONL 的 SHA-256（hex）；生成时未知写 unknown。",
+          "examples": ["unknown"]
+        }
+      },
+      "examples": [
+        { "path": "data/derived/scan-20261109-win01.jsonl", "count": 740209, "checksum": "unknown" }
+      ]
+    },
+
+    "summary": {
+      "description": "按原始标签聚合的分布事实；标签语义待确认，这里只做计数与范围统计。",
+      "$ref": "common.defs.json#/$defs/object_or_unknown",
+      "examples": [
+        {
+          "total_records": 740209,
+          "by_state": {
+            "FL": { "count": 646289, "delay_min": 2640, "delay_max": 3190 },
+            "SUCCESS": { "count": 4616, "delay_min": 3130, "delay_max": 3190 },
+            "Fake_Success": { "count": 6, "delay_min": 3145, "delay_max": 3182 }
+          }
+        }
+      ]
+    },
+
+    "evidence_level": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "汇总整体证据分级（必填）：全部由原始观测聚合=observation；混入仿真推断=hypothesis。",
+      "examples": ["observation"]
+    },
+    "timestamp": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "扫描完成时刻。",
+      "examples": ["2026-11-09T14:00:00+08:00", "unknown"]
+    }
+  }
+}

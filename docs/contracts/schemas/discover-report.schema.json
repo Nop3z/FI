@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/discover-report.schema.json",
+  "title": "DiscoverReport v0.3（芯片接入自动发现报告）",
+  "description": "承载 fi discover 的自动发现产出（regions / traps / targets 三类），供仿真配置生成、迭代补模型与注入靶点选择消费。**自动发现证据闸门（硬约束）**：本契约内一切 confidence 只允许 hypothesis | unknown，禁 fact、也禁 observation——自动发现是结构启发式产出，必须经人工/交叉验证后才可升级，升级结果写入 Chip Profile 或 reverse-report，不得回写本报告。suggested_action 限 skip_insn|flip_reg_bits|reg_write|mem_write|map_region|stub_read。每个发现条目必须附 sample_evidence（可回溯的原始证据样例：地址/字节/反汇编片段/偏移）。",
+  "type": "object",
+  "required": ["schema", "tool", "image", "method", "summary", "findings", "confidence", "evidence_kind"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "description": "报告格式标识（发现报告族版本串，随工具演进；消费方按 major 段判断兼容）。",
+      "examples": ["fi.discover.report-v0"]
+    },
+
+    "tool": {
+      "type": "object",
+      "description": "产出报告的发现工具标识（可复现性要求）。",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "工具名（模块级）。",
+          "examples": ["fi.discover.regions"]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "工具版本（语义化）。",
+          "examples": ["0.1.0"]
+        }
+      },
+      "examples": [{ "name": "fi.discover.regions", "version": "0.1.0" }]
+    },
+
+    "image": { "$ref": "#/$defs/image_meta" },
+
+    "method": {
+      "type": "object",
+      "description": "发现方法声明：用了哪些证据通道、边界在哪（消费方必须知道结论的可信边界）。",
+      "required": ["channels", "boundaries"],
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "type": "array",
+          "description": "证据通道清单（如 lui+addi 常量对、绝对 lw/sw、jal 目标、数据段地址字、csrw mtvec 模式）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [
+            ["lui+addi 常量对（窗口 6 条）", "基址寄存器绝对 lw/sw", "jal 直接目标"]
+          ]
+        },
+        "boundaries": {
+          "type": "array",
+          "description": "方法与结论的边界/已知噪声来源（必须诚实登记，如线性扫描含数据段、未做可达性分析）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [
+            ["线性扫描含数据段，伪指令可能产生噪声", "未做控制流可达性分析（复位入口 unknown）", "区域边界为页级近似，未独立确认"]
+          ]
+        },
+        "parameters": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "本次发现使用的关键参数（分页大小/最小命中数/地址区间/解码模式等，自由对象）。",
+          "examples": [{ "page": 4096, "min_hits": 2, "xlen": 32 }]
+        }
+      },
+      "examples": [
+        {
+          "channels": ["lui+addi 常量对（窗口 6 条）", "基址寄存器绝对 lw/sw", "jal 直接目标"],
+          "boundaries": ["线性扫描含数据段，伪指令可能产生噪声", "未做控制流可达性分析"],
+          "parameters": { "page": 4096, "min_hits": 2, "xlen": 32 }
+        }
+      ]
+    },
+
+    "summary": {
+      "type": "object",
+      "description": "汇总统计（各类发现计数与过滤参数），供 UI 概览与管线决策。",
+      "required": ["counts"],
+      "additionalProperties": false,
+      "properties": {
+        "counts": {
+          "type": "object",
+          "description": "分类计数（键为自由分类名，值为非负整数）。",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "examples": [{ "regions": 12, "traps": 3, "targets": 19 }]
+        },
+        "filters": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "生效的过滤条件（最小命中数/最大输出条数等）。",
+          "examples": [{ "min_hits": 2, "top_n": 40 }]
+        },
+        "notes": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "汇总备注。",
+          "examples": ["区域内候选按命中数×访问类型多样性排序"]
+        },
+        "sources": {
+          "type": "array",
+          "description": "合并报告的来源工具清单（单一模块产出时省略；冲突时消费方按此追溯各分组出处）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["fi.discover.regions", "fi.discover.traps", "fi.discover.targets"]]
+        }
+      },
+      "examples": [
+        {
+          "counts": { "regions": 12, "traps": 3, "targets": 19 },
+          "filters": { "min_hits": 2, "top_n": 40 },
+          "notes": "候选按证据强度排序，非穷举"
+        }
+      ]
+    },
+
+    "findings": {
+      "type": "object",
+      "description": "发现条目三分组。空数组=该类本次未产出（正常，不报错；但消费方不得据此断言『不存在』）。",
+      "required": ["regions", "traps", "targets"],
+      "additionalProperties": false,
+      "properties": {
+        "regions": {
+          "type": "array",
+          "description": "内存/外设区域候选（RAM / MMIO / ROM-like / code）。",
+          "items": { "$ref": "#/$defs/finding_item" },
+          "examples": [
+            [
+              {
+                "kind": "ram",
+                "addr": 536870912,
+                "offset": 0,
+                "insn": "lui t0, 0x20000",
+                "context": "lui t0, 0x20000 / sw a0, 0(t0)",
+                "suggested_action": "map_region",
+                "confidence": "hypothesis",
+                "evidence_kind": "artifact_derived",
+                "sample_evidence": ["page_base=0x20000000 hit_count=7 accesses=[read,write]"]
+              }
+            ]
+          ]
+        },
+        "traps": {
+          "type": "array",
+          "description": "异常机制相关发现（mtvec 安装点 / mcause 读取点 / mret / ecall 等）。",
+          "items": { "$ref": "#/$defs/finding_item" },
+          "examples": [
+            [
+              {
+                "kind": "mtvec_write",
+                "addr": 536875008,
+                "offset": 448,
+                "insn": "csrw mtvec, t0",
+                "context": "lui t0, 0x20010 / addi t0, t0, 0x20 / csrw mtvec, t0",
+                "suggested_action": "stub_read",
+                "confidence": "hypothesis",
+                "evidence_kind": "artifact_derived",
+                "sample_evidence": ["base_candidate=0x20010020 base_in_image=true"]
+              }
+            ]
+          ]
+        },
+        "targets": {
+          "type": "array",
+          "description": "注入靶点候选（错误码装载点 / 比较分支 / 共享发送函数调用点）。",
+          "items": { "$ref": "#/$defs/finding_item" },
+          "examples": [
+            [
+              {
+                "kind": "error_code_store",
+                "addr": 536875200,
+                "offset": 1210,
+                "insn": "li a1, 0x50",
+                "context": "li a0, 0x1 / li a1, 0x50 / call send_frame",
+                "suggested_action": "flip_reg_bits",
+                "confidence": "hypothesis",
+                "evidence_kind": "artifact_derived",
+                "sample_evidence": ["race: 错误码半字装载邻近发送调用点（19 调用点之一）"]
+              }
+            ]
+          ]
+        }
+      },
+      "examples": [
+        {
+          "regions": [],
+          "traps": [
+            {
+              "kind": "mtvec_write",
+              "addr": 536875008,
+              "offset": 448,
+              "insn": "csrw mtvec, t0",
+              "context": "lui t0, 0x20010 / addi t0, t0, 0x20 / csrw mtvec, t0",
+              "suggested_action": "stub_read",
+              "confidence": "hypothesis",
+              "evidence_kind": "artifact_derived",
+              "sample_evidence": ["base_candidate in image"]
+            }
+          ],
+          "targets": []
+        }
+      ]
+    },
+
+    "confidence": {
+      "type": "string",
+      "enum": ["hypothesis", "unknown"],
+      "description": "报告整体置信级别：**只能 hypothesis 或 unknown**（自动发现证据闸门，禁 fact/observation）。",
+      "examples": ["hypothesis"]
+    },
+
+    "evidence_kind": {
+      "type": "string",
+      "enum": ["artifact", "artifact_derived"],
+      "description": "证据来源种类：artifact=镜像本体直接证据（如镜像 SHA-256/字节）；artifact_derived=对镜像的静态分析推导。自动发现产出通常为 artifact_derived。",
+      "examples": ["artifact_derived"]
+    },
+
+    "generated_at": {
+      "$ref": "common.defs.json#/$defs/timestamp",
+      "description": "报告生成时刻。",
+      "examples": ["2026-11-09T18:00:00+08:00", "unknown"]
+    },
+
+    "notes": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "备注（后续动作建议、与其它报告的关联）。",
+      "examples": ["区域候选供 fi discover iterate 补模型使用"]
+    }
+  },
+
+  "$defs": {
+    "image_meta": {
+      "type": "object",
+      "description": "被分析镜像的元数据（重放校验用）。",
+      "required": ["path", "sha256", "size_bytes", "base_address"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "镜像路径（相对仓库根）。",
+          "examples": ["firmware.bin"]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "镜像 SHA-256（hex）。",
+          "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "镜像字节数。",
+          "examples": [131072]
+        },
+        "base_address": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "加载基址（调用方给定事实，十进制 uint）。",
+          "examples": [134217728]
+        }
+      },
+      "examples": [
+        {
+          "path": "firmware.bin",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 131072,
+          "base_address": 134217728
+        }
+      ]
+    },
+
+    "finding_item": {
+      "type": "object",
+      "description": "一条自动发现条目。纪律：confidence 只能 hypothesis|unknown；必须附 sample_evidence 供人工复核；evidence_kind 只能是 artifact|artifact_derived。",
+      "required": ["kind", "addr", "offset", "insn", "context", "suggested_action", "confidence", "evidence_kind", "sample_evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "发现类型（自由短名；区域类如 ram/mmio/rom-like/code，trap 类如 mtvec_write/mcause_read/mret_site，靶点类如 error_code_store/branch_compare/shared_send_call）。",
+          "examples": ["ram", "mmio", "mtvec_write", "error_code_store"]
+        },
+        "addr": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "发现地址（uint）：区域=页基址/区域基址；trap/靶点=指令地址。",
+          "examples": [536870912, 536875008]
+        },
+        "offset": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "相对镜像加载基址的字节偏移；区域类条目无单一偏移时写 unknown。",
+          "examples": [448, "unknown"]
+        },
+        "insn": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "证据指令文本（反汇编原样）；区域类条目给代表性指令。",
+          "examples": ["csrw mtvec, t0", "unknown"]
+        },
+        "context": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "上下文（前后若干条反汇编 / 常量构造链 / 命中统计摘要）。",
+          "examples": ["lui t0, 0x20010 / addi t0, t0, 0x20 / csrw mtvec, t0"]
+        },
+        "suggested_action": {
+          "type": "string",
+          "enum": ["skip_insn", "flip_reg_bits", "reg_write", "mem_write", "map_region", "stub_read"],
+          "description": "建议动作：map_region=映射内存区；stub_read=读取时用占位值；其余为注入动作（与 sim-trace fault_event.action.kind 对齐）。",
+          "examples": ["map_region", "stub_read", "flip_reg_bits"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["hypothesis", "unknown"],
+          "description": "条目置信级别：**只能 hypothesis 或 unknown**（自动发现禁 fact/observation，升级须走人工验证并在 Chip Profile/reverse-report 中落 fact）。",
+          "examples": ["hypothesis"]
+        },
+        "evidence_kind": {
+          "type": "string",
+          "enum": ["artifact", "artifact_derived"],
+          "description": "条目证据来源种类。",
+          "examples": ["artifact_derived"]
+        },
+        "sample_evidence": {
+          "type": "array",
+          "description": "原始证据样例（供人工复核与 UI 展开）：地址/字节/偏移/反汇编片段/统计摘要，至少 1 条。",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [
+            ["page_base=0x20000000 hit_count=7 accesses=[read,write]", "lui t0, 0x20000 @ rom+0x1A2"]
+          ]
+        },
+        "artifact_derived_from": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "推导来源通道名（method.channels 中的一条），便于追溯。",
+          "examples": ["lui+addi 常量对（窗口 6 条）", "unknown"]
+        },
+        "related": {
+          "type": "array",
+          "description": "关联条目定位（如靶点关联的函数/发送调用点），自由字符串。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["func-0x2000157a"]]
+        }
+      },
+      "examples": [
+        {
+          "kind": "mtvec_write",
+          "addr": 536875008,
+          "offset": 448,
+          "insn": "csrw mtvec, t0",
+          "context": "lui t0, 0x20010 / addi t0, t0, 0x20 / csrw mtvec, t0",
+          "suggested_action": "stub_read",
+          "confidence": "hypothesis",
+          "evidence_kind": "artifact_derived",
+          "sample_evidence": ["base_candidate in image"],
+          "artifact_derived_from": "csrw mtvec 前窗口常量构造",
+          "related": ["func-0x20010020"]
+        }
+      ]
+    }
+  }
+}
