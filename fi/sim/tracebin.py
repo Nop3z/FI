@@ -327,7 +327,10 @@ class BinaryTracer:
         applied_at_seq: int,
         applied_result: dict | str = _UNKNOWN,
     ) -> None:
-        self.flush_insn()
+        # 与 full 模式（fi.sim.tracer.Tracer.fault_event）保持一致的行序：
+        # **不** flush 当前指令行——注入事件发生在该指令"执行中"，
+        # 全量模式里 fault_event 行就排在这条 trace 行之前。若此处 flush，
+        # 事件行会晚一行，两种轨迹级别顺序不一致。
         self._flush_chunk()
         row = {
             "type": "fault_event",
@@ -426,15 +429,23 @@ class BinaryTracer:
                 flags |= F_INSN_SIZE4
 
         mem_extra = int(cur.get("_mem_extra") or 0)
-        if mem_extra:
+        mem_unmapped = isinstance(mem, dict) and bool(mem.get("unmapped"))
+        if mem_extra or mem_unmapped:
             flags |= F_EXT
 
         self._buf.append(flags)
         if flags & F_EXT:
-            # 扩展字节：bit0 表示存在多条内存事件（本实现只保留最后一条，
-            # 但如实记录被丢弃的条数，读端可据此提示信息缺失）
-            self._buf.append(0x01)
-            _write_varint(self._buf, mem_extra)
+            # 扩展字节：bit0=有多条内存事件（本实现只保留最后一条，但如实记录被丢弃
+            # 的条数）；bit1=该 mem_access 来自 unmapped 动态占位页（必须显式存，
+            # 不能从 region 名反推——重访已映射动态页时走 valid 钩子，不带 unmapped 标志）
+            ext = 0
+            if mem_extra:
+                ext |= 0x01
+            if mem_unmapped:
+                ext |= 0x02
+            self._buf.append(ext)
+            if mem_extra:
+                _write_varint(self._buf, mem_extra)
 
         if width_code == 0:
             pass
@@ -661,11 +672,13 @@ class TraceReader:
         pos += 1
 
         mem_extra = 0
+        mem_unmapped = False
         if flags & F_EXT:
             if pos >= len(data):
                 raise ValueError("指令记录截断（缺扩展字节）")
             ext = data[pos]
             pos += 1
+            mem_unmapped = bool(ext & 0x02)
             if ext & 0x01:
                 mem_extra, pos = _read_varint(data, pos)
 
@@ -717,7 +730,7 @@ class TraceReader:
         }
 
         if flags & F_HAS_MEM:
-            mem, pos, prev_mem_addr = self._decode_mem(data, pos, prev_mem_addr)
+            mem, pos, prev_mem_addr = self._decode_mem(data, pos, prev_mem_addr, mem_unmapped)
             if mem_extra:
                 # 一条指令多次访存时 full 模式只留最后一次（已知限制）；这里如实说明
                 self.info["dropped_mem_events"] += mem_extra
@@ -739,7 +752,8 @@ class TraceReader:
 
         return row, pos, pc, size or 4, prev_mem_addr
 
-    def _decode_mem(self, data: bytes, pos: int, prev_mem_addr: int | None) -> tuple[dict, int, int]:
+    def _decode_mem(self, data: bytes, pos: int, prev_mem_addr: int | None,
+                    unmapped: bool = False) -> tuple[dict, int, int]:
         hdr = data[pos]
         pos += 1
         kind = _KIND_NAMES[hdr & 0b11]
@@ -778,9 +792,8 @@ class TraceReader:
             else:
                 value = int.from_bytes(raw, "little")
 
-        # unmapped 动态占位页在写入端 region 恒为 "__dynamic__"（machine.py 约定），
-        # 读回时据此还原 unmapped 标志，保证与 full 模式字段等价。
-        unmapped = region == _DYNAMIC_REGION
+        # unmapped 标志由写入端的扩展字节显式承载（不从 region 名反推：
+        # 重访已映射的动态页时走 valid 钩子，region 同为 __dynamic__ 但无 unmapped）
         note = (
             "unmapped 动态占位页：仿真器零页占位，非硬件观测" if unmapped
             else "占位访问：值由仿真器 stub 产生，非硬件观测" if stub

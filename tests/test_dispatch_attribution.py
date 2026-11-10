@@ -16,30 +16,21 @@ import pytest
 
 from fi.discover.attribution import attribute_codes
 from fi.discover.dispatch import discover_dispatch
+from tests.smoke_env import resolve_sample
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _sample_image() -> tuple[Path, int] | None:
-    """找一个可用样例镜像：优先仓库根的 *.bin，其次环境变量。"""
-    import os
-
-    env = os.environ.get("FI_SMOKE_IMAGE")
-    candidates = ([Path(env)] if env else []) + sorted(ROOT.glob("*.bin"))
-    for c in candidates:
-        if c.is_file() and c.stat().st_size > 0:
-            base_env = os.environ.get("FI_SMOKE_BASE")
-            base = int(base_env, 0) if base_env else 0
-            return c, base
-    return None
-
-
 @pytest.fixture(scope="module")
 def sample() -> tuple[Path, int]:
-    s = _sample_image()
-    if s is None:
-        pytest.skip("未找到样例镜像（设置 FI_SMOKE_IMAGE 或放一个 *.bin 到仓库根）")
-    return s
+    """冒烟样例（镜像 + 基址）。
+
+    **必须设置 FI_SMOKE_BASE**：本文件全部断言依赖地址语义（分派表指针是否
+    落在镜像内、码→指令归因地址是否正确）。历史上这里默认 ``base=0``，
+    导致用仓库根真实 ROM 跑时所有绝对地址都错、产出垃圾 —— 既可能假绿也
+    可能假红。解析逻辑已收口到 ``tests/smoke_env.py`` 单一实现。
+    """
+    return resolve_sample(require_base=True)
 
 
 def test_dispatch_report_shape_and_gates(sample) -> None:

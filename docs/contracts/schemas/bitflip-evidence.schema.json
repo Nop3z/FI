@@ -107,16 +107,90 @@
             "evidence_id": "bf-type-demo",
             "summary": "在 0x1000 处翻转 1 个 bit，码 0x<CODE_D> → 0x<CODE_B>",
             "claim": {
-              "source_code": "0x<CODE_D>",
-              "target_code": "0x<CODE_B>",
-              "flip_count_required": 1,
-              "flipped_machine_code_bits": [30],
-              "flipped_reg_value_bits": [10],
-              "bit_mask_on_reg_value": "0x400",
-              "mask_applies_to": "post_insn_reg_value",
-              "confidence": "hypothesis"
-            },
-            "technical_chain": {
+      "type": "object",
+      "description": "核心断言：源码经 N 个 bit 翻转变成目标码。**防坑字段必填**：`bit_mask_on_reg_value`（寄存器值掩码，注入用）+ `mask_applies_to`（固定常量，明确掩码作用于寄存器值而非机器码）。",
+      "required": [
+        "source_code",
+        "target_code",
+        "flip_count_required",
+        "flipped_reg_value_bits",
+        "bit_mask_on_reg_value",
+        "mask_applies_to",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source_code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "源错误码（数据源原样字面量）。",
+          "examples": ["0x<CODE_D>"]
+        },
+        "target_code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "目标错误码（翻转后）。",
+          "examples": ["0x<CODE_B>"]
+        },
+        "flip_count_required": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "达成该迁移所需的位翻转个数。",
+          "examples": [1]
+        },
+        "flipped_machine_code_bits": {
+          "type": "array",
+          "description": "被翻转的**机器码**位位置（LSB=0 起算；来自 fi.fault.effects 枚举）。仅作静态分析证据，**不得直接用于注入**（见 bit_mask_on_reg_value）。",
+          "items": { "type": "integer", "minimum": 0 },
+          "examples": [[30]]
+        },
+        "flipped_reg_value_bits": {
+          "type": "array",
+          "description": "**必填**：对应的**寄存器值**位位置（LSB=0 起算）——这才是注入时翻转的位。I-type 装载指令中与机器码位的关系通常为 `reg_bit = machine_bit - 20`。",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 0 },
+          "examples": [[10]]
+        },
+        "bit_mask_on_reg_value": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{1,8}$",
+          "description": "**防坑字段 1（必填）**：注入时施加在**寄存器值**上的位掩码（hex）。必须由 `flipped_reg_value_bits` 导出（mask = Σ 1<<bit）。**语义不变量**：`source_code XOR target_code` 的位集合必须与 `flipped_reg_value_bits` 一致，且 mask 必须等于这些位的掩码，否则拒。历史 bug：拿机器码位当注入掩码（如 0x40000000）会翻到无关高位，码值不变、注入静默失效。",
+          "examples": ["0x400"]
+        },
+        "mask_applies_to": {
+          "type": "string",
+          "const": "post_insn_reg_value",
+          "description": "**防坑字段 2（必填，固定常量）**：明确该掩码作用于『指令执行后的寄存器值』，而不是机器码、不是指令字节、不是内存。schema const 强制，写错即拒。",
+          "examples": ["post_insn_reg_value"]
+        },
+        "physically_explains": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "该翻转解释了什么的自然语言说明（为什么一位翻转足以解释观测迁移）。",
+          "examples": ["单 bit 1→0 即可把一个实测码变成另一个实测码，无需多 bit 命中或路径改变"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "断言置信级别恒为 hypothesis（预测，未经复现）。观测计数在 experimental_context 中另行标注 observation——**两者不得混为一个数字**。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "source_code": "0x<CODE_D>",
+          "target_code": "0x<CODE_B>",
+          "flip_count_required": 1,
+          "flipped_machine_code_bits": [30],
+          "flipped_reg_value_bits": [10],
+          "bit_mask_on_reg_value": "0x400",
+          "mask_applies_to": "post_insn_reg_value",
+          "physically_explains": "单 bit 1→0 即可把实测码 A 变成实测码 B",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "technical_chain": {
               "target_addr": "0x1000",
               "insn_bytes_hex": "13054050",
               "insn": "addi a0, zero, 0x504",
@@ -373,12 +447,11 @@
         }
       ]
     },
-
     "technical_chain": {
       "type": "object",
-      "description": "技术链条（地址 → 指令 → 翻转后指令），供人工复核与重放。",
+      "description": "技术链条（地址 → 指令 → 翻转后指令），供人工复核与重放。**允许实现扩展字段**（additionalProperties=true）：不同芯片/工具会带各自的上下文量（如命令号十进制、位域说明），契约只锁定下面这些关键字段的语义。",
       "required": ["target_addr", "insn_bytes_hex", "insn"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "command": {
           "$ref": "common.defs.json#/$defs/string_or_unknown",

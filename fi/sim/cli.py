@@ -210,19 +210,30 @@ def _collect_trace_stats(tracer, trace_level: str, trace_path) -> dict:
         stats.update(inner)
     if trace_path is not None and Path(trace_path).exists():
         size = Path(trace_path).stat().st_size
+        # full/sampled 的 Tracer 不维护 stats.instructions，用行数兜底
         n = int(stats.get("instructions") or stats.get("instructions_written") or 0)
+        if not n:
+            n = getattr(tracer, "instruction_count", 0) or 0
+        if not n:
+            try:
+                n = sum(
+                    1 for line in Path(trace_path).read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                )
+            except (OSError, UnicodeDecodeError):
+                n = 0
         stats["file"] = str(trace_path)
         stats["file_bytes"] = size
         stats["bytes_per_instruction"] = round(size / n, 3) if n else "unknown"
         if trace_level == "binary":
             stats["note"] = (
                 "binary 为紧凑表示：pc 增量 + 指令字典 + 事件位图；"
-                "可用 fi.sim.tracebin.TraceReader 读回契约行"
+                "可用 fi.sim dump-trace 读回契约行"
             )
         elif trace_level == "sampled":
             stats["note"] = (
-                "sampled 只落 1/N 指令行，但事件行（stub 访问/fault_event/run_end）全保留；"
-                "bytes_per_instruction 按**写入行数**计的参考值，不代表单条真实开销"
+                "sampled 只落 1/N 指令行 + 特殊行（stub/CSR/hypothesis/尾 N 条）；"
+                "被丢条数见 skipped_by_sampling；指令总数以 summary.instructions 为准"
             )
     elif trace_level == "off":
         stats["file_bytes"] = 0
@@ -346,6 +357,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     tracer.close()
 
     trace_stats = _collect_trace_stats(tracer, trace_level, trace_path)
+    if trace_level != "off" and result.instructions:
+        # bytes/instr 的分母必须是**已执行指令数**（不是已写入行数），
+        # 否则 sampled 会因"总行数少"而被算成虚高的单条开销
+        size = trace_stats.get("file_bytes") or 0
+        trace_stats["bytes_per_instruction"] = round(size / result.instructions, 3)
 
     summary_uart_logs = {
         name: {"text": dev.text, "write_count": dev.write_count}

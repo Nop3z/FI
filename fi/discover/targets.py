@@ -208,6 +208,89 @@ def _load_tracking(insns: list[_Insn]) -> list[dict[str, int]]:
     return snap
 
 
+def _usability_assessment(
+    insns: list[_Insn],
+    graph: dict[int, list[dict]],
+    *,
+    insn_count_raw: int,
+) -> dict:
+    """输入可用性自评（**防止在噪声/非 RISC-V 输入上产出大量误导性靶点**）。
+
+    背景（实测验教训）：在 8KB 随机字节镜像上，本工具曾产出 320 个"靶点"
+    （其中 251 个比较分支）——这些全是解码噪声，但报告看起来"有结果"，
+    极易在陌生芯片验收时被误读为"发现了 320 个注入点"。
+
+    判据选择过程（实测对比，4 类输入）：
+
+    | 输入 | 未解码比 | 常见指令占比 | 调用目标复用率 |
+    | --- | --- | --- | --- |
+    | 随机噪声 8KB | 22.7% | 51% | **0.7%** |
+    | 合成正常固件 | 0% | 85-100% | **20-50%** |
+    | target-chip ROM | 12.0% | 65% | **34.0%** |
+
+    结论：**未解码比与常见指令占比都无法区分**（噪声 22.7% vs 真实固件 12%），
+    但**直接调用目标复用率**区分度极大——真实固件里函数被反复调用（有复用），
+    随机字节解出的"调用"几乎全是各自不同的一次性目标。
+
+    判定规则（全部可解释，阈值写进 method.boundaries）：
+      - 可解码指令数 < 32 → `insufficient_instructions`（镜像太小/基址不对）
+      - 直接调用数 ≥ 16 且复用率 < 5% → `likely_random_or_non_riscv`（噪声输入）
+      - 否则 `usable`
+    """
+    total = max(1, len(insns))
+    undecoded = sum(1 for i in insns if i.text == "<undecoded>")
+    decode_ratio = 1 - undecoded / total
+    n_calls = sum(len(v) for v in graph.values())
+    n_targets = len(graph)
+    reuse = (1 - n_targets / n_calls) if n_calls else 0.0
+
+    reasons: list[str] = []
+    level = "usable"
+    if len(insns) < 32:
+        level = "insufficient_instructions"
+        reasons.append(
+            f"可解码指令仅 {len(insns)} 条（阈值 32）——镜像过小或基址/位宽不对，"
+            "靶点数量无统计意义")
+    elif n_calls >= 16 and reuse < 0.05:
+        level = "likely_random_or_non_riscv"
+        reasons.append(
+            f"直接调用 {n_calls} 个但目标只有 {n_targets} 个（复用率 {reuse:.1%} < 5%）"
+            "——真实固件的函数会被反复调用；此形态更像随机字节被误解码，"
+            "靶点几乎全部是噪声")
+    else:
+        reasons.append(
+            f"输入形态正常：可解码 {len(insns)} 条（{decode_ratio:.1%}），"
+            f"直接调用 {n_calls} 个 / 目标 {n_targets} 个（复用率 {reuse:.1%}）")
+
+    return {
+        "usable": level == "usable",
+        "assessment": level,
+        "reason": "；".join(reasons),
+        "metrics": {
+            "decodable_insn_count": len(insns),
+            "undecoded_ratio": round(undecoded / total, 4),
+            "decode_ratio": round(decode_ratio, 4),
+            "direct_call_sites": n_calls,
+            "distinct_call_targets": n_targets,
+            "call_target_reuse_ratio": round(reuse, 4),
+        },
+        "thresholds": {
+            "min_decodable_insns": 32,
+            "min_call_sites_for_reuse_test": 16,
+            "min_call_target_reuse_ratio": 0.05,
+            "rationale": (
+                "阈值由 4 类输入实测标定（随机噪声复用率 0.7%；合成固件 20-50%；"
+                "真实 ROM 34%）；未解码比与常见指令占比区分度不足，故不作主判据"),
+        },
+        "consumption_rule": (
+            "usable=false 时**不得**把 targets 当作注入候选；"
+            "应先用 regions/traps 或人工确认镜像与基址是否匹配"
+        ),
+        "confidence": "hypothesis",
+        "evidence_kind": "artifact_derived",
+    }
+
+
 def discover_targets(
     image_path: str,
     base: int,
@@ -426,6 +509,9 @@ def discover_targets(
 
     targets = load_targets[:max_targets_per_kind] + branch_targets + call_targets[:max_shared_functions]
 
+    # ---------- 输入可用性自评（噪声/非 RISC-V 输入必须显式降级）----------
+    usability = _usability_assessment(insns, graph, insn_count_raw=len(insns))
+
     # ---------- 汇总 ----------
     value_hist: dict[str, int] = defaultdict(int)
     for t in load_targets:
@@ -435,6 +521,7 @@ def discover_targets(
     return {
         "schema": "fi.discover.target-report-v0",
         "tool": {"name": "fi.discover.targets", "version": "0.1.0"},
+        "usability_assessment": usability,
         "image": {
             "path": str(image_path),
             "sha256": sha256_hex(image),
@@ -461,6 +548,13 @@ def discover_targets(
                 "lui+addi 配对允许夹 1 条指令（编译器调度），仍可能漏配或错配",
                 "suggested_action 是结构建议，未验证注入效果（需 fi.sim 试跑）",
                 "本报告只产出候选，绝不改写 Profile 中任何 fact 级 claim",
+                "**可用性自评**：usability_assessment.usable=false 时靶点为噪声，不得使用。"
+                "判定用『直接调用目标复用率』（阈值 5%，实测：随机噪声 0.7% / 合成固件 20-50% / "
+                "真实 ROM 34%）；未解码比与常见指令占比区分度不足（噪声 22.7% vs 真实 12%），"
+                "故仅作参考指标不作主判据",
+                "usability 判据假设镜像含『函数被反复调用』这一通用固件特征；"
+                "**极小固件（<32 条可解码指令）或纯直线代码**会被判为 insufficient，"
+                "此时应人工确认镜像与基址，而不是认为工具失灵",
             ],
         },
         "summary": {

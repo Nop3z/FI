@@ -369,6 +369,7 @@ def build_live_plan(
         "schema": SCHEMA,
         "tool": {"name": "fi.discover.live_plan", "version": "0.1.0"},
         "title": "实机注入方案（PowerShorter）：把静态码迁移转成可执行实验",
+        "image": key_evidence.get("image"),
         "inputs": {
             "n_delay_points": n_delay_points,
             "samples_per_point": samples_per_point,

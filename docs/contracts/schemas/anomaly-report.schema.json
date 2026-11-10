@@ -138,7 +138,8 @@
         "frame_format": { "$ref": "#/$defs/frame_section" },
         "statistical_power": { "$ref": "#/$defs/power_section" },
         "unknowns": { "$ref": "#/$defs/unknowns_section" },
-        "evidence_chain": { "$ref": "#/$defs/evidence_section" }
+        "evidence_chain": { "$ref": "#/$defs/evidence_section" },
+        "instruction_attribution": { "$ref": "#/$defs/instruction_attribution_section" }
       },
       "examples": [
         {
@@ -1922,6 +1923,260 @@
         "pattern": "^ev-[a-z0-9][a-z0-9-]*$"
       },
       "examples": [["ev-001", "ev-002"], []]
+    },
+
+    "instruction_attribution_section": {
+      "type": "object",
+      "description": "**可选第 7 块**：指令级归因（观测到的响应码 → 命令号 → handler → 装载该码的指令地址/文本）。仅在调用方提供固件镜像 + 基址时产出；缺输入时按 `available=false` + `reason` 明确登记，不推测。**换芯片零改动**：镜像路径、基址、码值全部来自调用参数，本块不内置任何芯片常量。",
+      "required": ["available", "codes_observed", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "该块的实现格式标识（自由字符串，随实现演进）。",
+          "examples": ["fi.analysis.instruction-attribution-v1", "unknown"]
+        },
+        "available": {
+          "type": "boolean",
+          "description": "本块是否可分析（缺镜像/缺基址/无 hex 码时 false，chunk 仍需出现并给 reason）。",
+          "examples": [true, false]
+        },
+        "reason": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "不可用原因（available=false 时必填；明确区分『缺镜像』『缺基址』『无码』『归因失败』）。",
+          "examples": ["未提供固件镜像（--image），无法做指令级归因", "unknown"]
+        },
+        "codes_observed": {
+          "type": "array",
+          "description": "从观测数据中提取出的十六进制码清单（原样字面量；无码时为空数组）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["0x<CODE_B>", "0x<CODE_A>"]]
+        },
+        "image": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "被归因镜像的元数据（path/sha256/size_bytes/base_address）；不可用时写 unknown。",
+          "examples": [
+            {
+              "path": "firmware.bin",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "size_bytes": 131072,
+              "base_address": 2147483648
+            },
+            "unknown"
+          ]
+        },
+        "command_table": {
+          "type": "object",
+          "description": "命令分派表摘要（表地址与条目数）；未恢复表时字段可为 unknown。",
+          "additionalProperties": false,
+          "properties": {
+            "source_table_addr": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "分派表源地址（hex 字符串）。",
+              "examples": ["0x1000", "unknown"]
+            },
+            "entry_count": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "命令表条目数。",
+              "examples": [7, "unknown"]
+            }
+          },
+          "examples": [{ "source_table_addr": "0x1000", "entry_count": 7 }]
+        },
+        "summary": {
+          "type": "object",
+          "description": "归因汇总（多少码被归因、多少站点、多少 handler）。",
+          "additionalProperties": false,
+          "properties": {
+            "codes_requested": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "请求归因的码数。",
+              "examples": [7, "unknown"]
+            },
+            "codes_attributed": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "成功归因到 handler 内装载指令的码数。",
+              "examples": [7, "unknown"]
+            },
+            "total_sites": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "归因站点总数。",
+              "examples": [9, "unknown"]
+            },
+            "handler_count": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "涉及的 handler 数。",
+              "examples": [7, "unknown"]
+            }
+          },
+          "examples": [
+            { "codes_requested": 7, "codes_attributed": 7, "total_sites": 9, "handler_count": 7 }
+          ]
+        },
+        "attributions": {
+          "type": "array",
+          "description": "逐码归因结果（每个码一条；未归因的码给 status 与成因分类，不留空白）。",
+          "items": { "$ref": "#/$defs/code_attribution" },
+          "examples": [
+            [
+              {
+                "code": "0x<CODE_B>",
+                "status": "attributed_to_handler",
+                "site_count": 1,
+                "handler_count": 1,
+                "sites": [],
+                "confidence": "hypothesis"
+              }
+            ]
+          ]
+        },
+        "method_boundaries": {
+          "type": "array",
+          "description": "方法边界声明（静态归因的固有局限，如『不等于运行时确实执行了该指令』）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["静态归因仅证明该码在某 handler 体内以立即数装载"]]
+        },
+        "discipline": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "纪律声明（人读）。",
+          "examples": ["静态归因需运行期证据（仿真/实测）才能升级为事实"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "本块综合证据等级（静态归因=hypothesis；不可用=unknown）。",
+          "examples": ["hypothesis", "unknown"]
+        },
+        "evidence_kind": {
+          "type": "string",
+          "enum": ["artifact", "artifact_derived", "unknown"],
+          "description": "本块证据来源种类。",
+          "examples": ["artifact_derived", "unknown"]
+        },
+        "evidence_refs": { "$ref": "#/$defs/evidence_ref_list" }
+      },
+      "examples": [
+        {
+          "schema": "fi.analysis.instruction-attribution-v1",
+          "available": false,
+          "reason": "未提供固件镜像（--image），无法做指令级归因",
+          "codes_observed": ["0x<CODE_B>"],
+          "image": "unknown",
+          "summary": "unknown",
+          "attributions": [],
+          "confidence": "unknown",
+          "evidence_kind": "unknown",
+          "evidence_refs": []
+        }
+      ]
+    },
+
+    "code_attribution": {
+      "type": "object",
+      "description": "单个响应码的归因结果。",
+      "required": ["code", "status", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "响应码字面量。",
+          "examples": ["0x<CODE_B>"]
+        },
+        "status": {
+          "type": "string",
+          "description": "归因状态（attributed_to_handler / 各类未归因成因，自由短名）。未归因时**必须给成因分类**，不得留空。",
+          "examples": ["attributed_to_handler", "not_found_as_immediate", "only_16bit_form"]
+        },
+        "site_count": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "该码的装载站点数。",
+          "examples": [1, "unknown"]
+        },
+        "handler_count": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "该码涉及的 handler 数。",
+          "examples": [1, "unknown"]
+        },
+        "sites": {
+          "type": "array",
+          "description": "站点明细（每个站点 = 一条装载指令 + 所属命令/handler）。",
+          "items": { "$ref": "#/$defs/attribution_site" },
+          "examples": [[]]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该码归因结论的证据等级（静态归因=hypothesis）。",
+          "examples": ["hypothesis"]
+        },
+        "evidence_kind": {
+          "type": "string",
+          "enum": ["artifact", "artifact_derived", "unknown"],
+          "description": "该条目的证据来源种类。",
+          "examples": ["artifact_derived"]
+        }
+      },
+      "examples": [
+        {
+          "code": "0x<CODE_B>",
+          "status": "attributed_to_handler",
+          "site_count": 1,
+          "handler_count": 1,
+          "sites": [],
+          "confidence": "hypothesis",
+          "evidence_kind": "artifact_derived"
+        }
+      ]
+    },
+
+    "attribution_site": {
+      "type": "object",
+      "description": "一个装载站点（谁把该码装进了寄存器）。",
+      "required": ["insn_addr", "insn", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "insn_addr": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{1,16}$",
+          "description": "装载指令地址（hex 字符串）。",
+          "examples": ["0x1200"]
+        },
+        "insn": {
+          "type": "string",
+          "minLength": 1,
+          "description": "装载指令反汇编文本。",
+          "examples": ["li a0, 0x104"]
+        },
+        "command": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "所属命令号。",
+          "examples": ["0x12", "unknown"]
+        },
+        "handler": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "所属 handler 地址。",
+          "examples": ["0x1100", "unknown"]
+        },
+        "dest_reg": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "装载目标寄存器（ABI 名）。",
+          "examples": ["a0", "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "该站点归因的证据等级。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "insn_addr": "0x1200",
+          "insn": "li a0, 0x104",
+          "command": "0x12",
+          "handler": "0x1100",
+          "dest_reg": "a0",
+          "confidence": "hypothesis"
+        }
+      ]
     }
   }
 }

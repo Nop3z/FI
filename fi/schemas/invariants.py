@@ -347,6 +347,242 @@ def check_anomaly_report(instance: Any) -> list[str]:
     return errors
 
 
+#: bitflip-evidence 的掩码作用对象唯一合法常量。
+MASK_APPLIES_TO = "post_insn_reg_value"
+
+
+def _parse_hex_int(value: Any) -> int | None:
+    """解析 "0x..." / int / 十进制字符串为 int；失败返回 None。"""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            try:
+                return int(value, 16)
+            except ValueError:
+                return None
+    return None
+
+
+def _bits_of(value: int) -> set[int]:
+    """返回值为 1 的位位置集合。"""
+    return {i for i in range(max(1, value.bit_length())) if (value >> i) & 1}
+
+
+def check_bitflip_evidence(instance: Any) -> list[str]:
+    """bitflip-evidence 语义不变量（**两个防坑字段的核心校验**）。
+
+    背景（真实 bug）：`fi.fault.effects` 枚举的是**指令机器码位**，而注入翻转的是
+    **寄存器值位**（I-type 装载指令中机器码位 b ↔ 立即数位 b-20）。历史上拿机器码位
+    当注入掩码（如 0x40000000）会翻到无关高位：码值不变、注入静默失效且不报错。
+
+    本函数强制：
+    1. ``claim.bit_mask_on_reg_value`` 必须等于 ``bits(source XOR target)`` 的掩码
+       ——掩码写错（常见：用了机器码位）立即拒；
+    2. ``claim.mask_applies_to`` 必须为 ``post_insn_reg_value``（schema const 已拦，
+       此处复查嵌套的 injection spec）；
+    3. ``flipped_reg_value_bits`` 必须与 mask 的位集合一致（两处表达同一个事实，
+       不许一处对一处错）；
+    4. 报告级/条目级/claim 级 confidence 恒 hypothesis（观测计数在
+       experimental_context，属 observation，两者分字段）；
+    5. ``falsifiable_prediction.injection`` 里的 bit_mask/mask_applies_to 也必须一致
+       （这是真正喂给注入器的字段，最容易被手工改错）。
+    """
+    if not isinstance(instance, dict):
+        return ["<root>: 实例必须是 JSON object"]
+    errors: list[str] = []
+
+    if instance.get("confidence") != "hypothesis":
+        errors.append(
+            f"confidence: {instance.get('confidence')!r} 非法——位翻转证据是候选解释，恒 hypothesis"
+        )
+
+    for i, entry in enumerate(instance.get("entries") or []):
+        if not isinstance(entry, dict):
+            continue
+        where = f"entries[{i}]"
+        if entry.get("confidence") != "hypothesis":
+            errors.append(f"{where}.confidence: {entry.get('confidence')!r} 非法（恒 hypothesis）")
+
+        claim = entry.get("claim")
+        if not isinstance(claim, dict):
+            errors.append(f"{where}.claim: 缺失或非对象")
+            continue
+
+        if claim.get("confidence") != "hypothesis":
+            errors.append(
+                f"{where}.claim.confidence: {claim.get('confidence')!r} 非法（预测恒 hypothesis；"
+                "观测计数在 experimental_context，不得混进 claim）"
+            )
+
+        # --- 防坑 1：mask_applies_to 常量 ---
+        if claim.get("mask_applies_to") != MASK_APPLIES_TO:
+            errors.append(
+                f"{where}.claim.mask_applies_to: {claim.get('mask_applies_to')!r} 非法，"
+                f"必须是 {MASK_APPLIES_TO!r}（掩码作用于指令执行后的寄存器值，不是机器码）"
+            )
+
+        # --- 防坑 2：mask == source XOR target ---
+        src = _parse_hex_int(claim.get("source_code"))
+        tgt = _parse_hex_int(claim.get("target_code"))
+        mask = _parse_hex_int(claim.get("bit_mask_on_reg_value"))
+        if src is None or tgt is None:
+            errors.append(
+                f"{where}.claim: source_code/target_code 无法解析为整数"
+                f"（{claim.get('source_code')!r} / {claim.get('target_code')!r}）"
+            )
+        elif mask is None:
+            errors.append(f"{where}.claim.bit_mask_on_reg_value: 无法解析为整数")
+        else:
+            expected_mask = src ^ tgt
+            if mask != expected_mask:
+                hint = (
+                    "；提示：若你用机器码位算掩码就会得这个错——I-type 装载指令中"
+                    "机器码位 b 对应立即数位 b-20，注入必须用寄存器值掩码"
+                )
+                errors.append(
+                    f"{where}.claim.bit_mask_on_reg_value: {hex(mask)} != "
+                    f"source({hex(src)}) XOR target({hex(tgt)}) = {hex(expected_mask)}{hint}"
+                )
+
+            # --- flipped_reg_value_bits 必须与 mask 位集合一致 ---
+            bits = claim.get("flipped_reg_value_bits")
+            if isinstance(bits, list):
+                mask_bits = _bits_of(expected_mask)
+                declared = {b for b in bits if isinstance(b, int)}
+                if declared != mask_bits:
+                    errors.append(
+                        f"{where}.claim.flipped_reg_value_bits: {sorted(declared)} 与 "
+                        f"source XOR target 的位集合 {sorted(mask_bits)} 不一致"
+                    )
+
+            # --- 机器码位不得等于寄存器位（同号必然是把两者搞混） ---
+            mc_bits = claim.get("flipped_machine_code_bits")
+            reg_bits = claim.get("flipped_reg_value_bits")
+            if isinstance(mc_bits, list) and isinstance(reg_bits, list):
+                if set(mc_bits) == set(reg_bits) and mc_bits:
+                    errors.append(
+                        f"{where}.claim: flipped_machine_code_bits 与 flipped_reg_value_bits "
+                        f"完全相同 {mc_bits}——两者通常不同（I-type 差 20），疑似把两套位搞混"
+                    )
+
+        # --- 防坑 3：falsifiable_prediction.injection 一致性（真正喂给注入器的字段）---
+        pred = entry.get("falsifiable_prediction")
+        if isinstance(pred, dict):
+            inj = pred.get("injection")
+            if isinstance(inj, dict) and inj.get("action") == "flip_reg_bits":
+                inj_mask = _parse_hex_int(inj.get("bit_mask"))
+                claim_mask = _parse_hex_int(claim.get("bit_mask_on_reg_value"))
+                if inj_mask is not None and claim_mask is not None and inj_mask != claim_mask:
+                    errors.append(
+                        f"{where}.falsifiable_prediction.injection.bit_mask: {hex(inj_mask)} "
+                        f"与 claim.bit_mask_on_reg_value {hex(claim_mask)} 不一致"
+                        "（注入规格与断言必须同一套掩码）"
+                    )
+                if inj.get("mask_applies_to") != MASK_APPLIES_TO:
+                    errors.append(
+                        f"{where}.falsifiable_prediction.injection.mask_applies_to: "
+                        f"{inj.get('mask_applies_to')!r} 必须是 {MASK_APPLIES_TO!r}"
+                    )
+
+        # --- 观测与预测必须分字段（experimental_context 才能有 count）---
+        ctx = entry.get("experimental_context")
+        if isinstance(ctx, dict):
+            for key in ("source_code_observations", "target_code_observations"):
+                obs = ctx.get(key)
+                if isinstance(obs, dict):
+                    cnt = obs.get("count")
+                    if not isinstance(cnt, int):
+                        errors.append(
+                            f"{where}.experimental_context.{key}.count: 观测计数必须是整数"
+                        )
+    return errors
+
+
+def check_live_experiment(instance: Any) -> list[str]:
+    """live-experiment 语义不变量（实机记录，Captured 与 Simulated 严格分开）。
+
+    1. **state_origin 恒 captured**，captured_state.origin 亦然；实机记录不得标 simulated；
+    2. **Simulated 不得混入观测**：observation 块里不得出现 simulated 语义字段；
+       simulated_comparison.origin 必须为 simulated（不能拿仿真冒充捕获）；
+    3. **单位显式**：params.unit_scale 与 pattern 必须存在；delay_ns/pulse_ns 若给出
+       必须等于 raw × unit_scale（换算必须对得上，防手工算错）；
+    4. **pattern 段数 ≤ 8**（设备硬限制，超了会静默失效）；
+    5. **安全状态自洽**：safety.stopped=true ⇒ stop_reason 不得为 unknown。
+    """
+    if not isinstance(instance, dict):
+        return ["<root>: 实例必须是 JSON object"]
+    errors: list[str] = []
+
+    if instance.get("state_origin") != "captured":
+        errors.append(
+            f"state_origin: {instance.get('state_origin')!r} 非法——实机实验记录恒为 'captured'"
+            "（仿真推断请放 simulated_comparison）"
+        )
+    cs = instance.get("captured_state")
+    if isinstance(cs, dict):
+        if cs.get("origin") != "captured":
+            errors.append(
+                f"captured_state.origin: {cs.get('origin')!r} 非法（Captured State 恒为 captured）"
+            )
+
+    sim = instance.get("simulated_comparison")
+    if isinstance(sim, dict):
+        if sim.get("origin") != "simulated":
+            errors.append(
+                f"simulated_comparison.origin: {sim.get('origin')!r} 非法（仿真块恒为 simulated）"
+            )
+    obs = instance.get("observation")
+    if isinstance(obs, dict):
+        leaked = [k for k in obs if k in ("predicted_code", "simulated", "simulated_code")]
+        if leaked:
+            errors.append(
+                f"observation: 含仿真语义字段 {leaked}——实机观测不得混入仿真推断"
+            )
+
+    params = instance.get("params")
+    if isinstance(params, dict):
+        scale = params.get("unit_scale")
+        pattern = params.get("pattern")
+        if not isinstance(scale, int) or scale <= 0:
+            errors.append("params.unit_scale: 必须是正整数（raw→ns 换算比例，禁止隐式假设）")
+            scale = None
+        if not isinstance(pattern, list):
+            errors.append("params.pattern: 必须给出设备 pattern 原样回执")
+        elif len(pattern) > 8:
+            errors.append(
+                f"params.pattern: {len(pattern)} 段超过设备上限 8（超限会静默失效）"
+            )
+        if scale is not None:
+            for raw_key, ns_key in (("delay_raw", "delay_ns"), ("pulse_raw", "pulse_ns")):
+                raw = params.get(raw_key)
+                ns = params.get(ns_key)
+                if isinstance(raw, int) and isinstance(ns, int) and ns != raw * scale:
+                    errors.append(
+                        f"params.{ns_key}: {ns} != {raw_key}({raw}) × unit_scale({scale})"
+                        f" = {raw * scale}（换算对不上，疑似手工算错）"
+                    )
+
+    safety = instance.get("safety")
+    if isinstance(safety, dict):
+        if safety.get("stopped") is True and safety.get("stop_reason") in (None, "", UNKNOWN):
+            errors.append(
+                "safety.stop_reason: stopped=true 时必须给出停止原因（安全事件须可追因）"
+            )
+        limits = safety.get("limits")
+        if isinstance(limits, dict):
+            max_pulse = limits.get("max_pulse_raw")
+            pulse = (params or {}).get("pulse_raw") if isinstance(params, dict) else None
+            if isinstance(max_pulse, int) and isinstance(pulse, int) and pulse > max_pulse:
+                errors.append(
+                    f"params.pulse_raw({pulse}) 超过 safety.limits.max_pulse_raw({max_pulse})"
+                    "——该注入不应被记录为成功实验"
+                )
+    return errors
+
+
 #: fault-effect 允许的语义变化类别（与契约 enum 一致）。
 CHANGE_KINDS = (
     "same",
@@ -564,6 +800,8 @@ SEMANTIC_CHECKS: dict[str, Callable[[Any], list[str]]] = {
     "fault-effect": check_fault_effect,
     "fault-explanation": check_fault_explanation,
     "observation-classification": check_observation_classification,
+    "bitflip-evidence": check_bitflip_evidence,
+    "live-experiment": check_live_experiment,
 }
 
 

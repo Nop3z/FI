@@ -5,17 +5,23 @@
 | 级别 | 产物 | 体积（实测 target-chip 40 万指令） | 用途 |
 | --- | --- | --- | --- |
 | `off` | 只有 summary.json | 0（无轨迹文件） | 批量扫描、只关心结果 |
-| `binary`（默认） | trace.fitb | ≈4.5 B/指令（目标 ≤8） | 日常：完整逐指令信息 + 可读回 |
-| `sampled` | trace.jsonl（每 N 条抽样） | 随 N 线性下降 | 长时间运行的粗粒度观察 |
-| `full` | trace.jsonl（逐条全字段） | ≈262 B/指令 | 调试、契约比对基准 |
+| `binary`（默认） | trace.fitb | **5.57 B/指令**（目标 ≤8，相对 full 缩 44.5×） | 日常：完整逐指令信息 + 可读回 |
+| `sampled` | trace.jsonl（每 N 条抽样 + 特殊行全留） | 随 N 线性下降 | 长时间运行的粗粒度观察 |
+| `full` | trace.jsonl（逐条全字段） | 247.8 B/指令 | 调试、契约比对基准 |
 
 ## sampled 的语义（重要，避免误读）
 
-抽样的规则是"每 N 条指令落 1 条"，但**事件不被抽样丢弃**：
-- 有 `mem_access.stub=true` 的指令（占位访问）——纪律要求必须记录，抽样保留；
-- 所有 `fault_event` / `run_end` 行——全保留；
-- 被抽样跳过的指令条数在 `run_end.detail.trace_sampling` 里显式记账
-  （`skipped_by_sampling`），避免"轨迹看起来只有 4000 条"被误读成"只执行了 4000 条"。
+采样规则严格对齐 `docs/contracts/trace-levels.md` §5 keep_special：
+- `evidence_level=hypothesis` 的行——保留（含仿真器猜测效果，不可丢）；
+- `mem_access.stub=true` 的行——保留（占位值纪律）；
+- `csrs_changed` 非空的行——保留（CSR 语义是逆向关键证据）；
+- 停机前最后 N 条——保留（`keep_tail`，保证现场可见）；
+- `fault_event` / `run_meta` / `run_end`——全保留。
+
+**普通内存访问行（stub=false 且非 CSR、非 hypothesis）允许被抽样丢弃**，这是
+sampled 相对 full 省体积的主要来源。被丢弃的条数记在 `trace_stats.skipped_by_sampling`，
+采样策略登记进 `run_meta.memory_map.trace_policy`，避免"轨迹看起来只有 4000 条"
+被误读成"只执行了 4000 条"。
 
 ## 为什么 binary 不是"丢信息的压缩"
 
@@ -54,11 +60,18 @@ def trace_filename(level: str) -> str | None:
 
 
 class SampledTracer:
-    """抽样 JSONL 轨迹写入器（每 N 条指令 1 条，事件行全保留）。
+    """抽样 JSONL 轨迹写入器（每 N 条指令 1 条，特殊行全保留）。
 
     实现与 `fi.sim.tracer.Tracer` 相同的接口，可直接交给 Simulator。
-    抽样决策在 `flush_insn` 时做（此时该指令的 mem/csr 事件已到齐），
-    因此"有事件的指令"可以优先保留。
+    抽样决策在 `flush_insn` 时做（此时该指令的 mem/csr 事件已到齐）。
+
+    **特殊行定义严格对齐 `docs/contracts/trace-levels.md` §5 keep_special**：
+      - `evidence_level=hypothesis` 的行（含仿真器猜测效果，不可丢）
+      - `mem_access.stub=true` 的行（占位值纪律：必须记录）
+      - `csrs_changed` 非空的行（CSR 语义是逆向关键证据）
+      - 最后 N 条（`keep_tail`，保证停机现场可见）
+    普通内存访问行（stub=false 且非 CSR、非 hypothesis）**允许被抽样丢弃**——
+    这正是 sampled 相对 full 能省体积的地方；契约并未要求保留全部 mem 事件。
     """
 
     def __init__(
@@ -68,28 +81,51 @@ class SampledTracer:
         meta: dict[str, Any],
         *,
         every: int = 100,
-        keep_event_insns: bool = True,
-        keep_stub_insns: bool = True,
+        keep_tail: int = 200,
+        trace_policy_sink: dict | None = None,
     ):
         if every <= 0:
             raise ValueError("采样间隔 every 必须 > 0")
         from .tracer import Tracer
 
+        # 把采样策略登记进 run_meta（契约 §5 要求消费方知道"缺的指令是没记，不是没跑"）
+        meta = dict(meta)
+        memory_map = meta.get("memory_map")
+        if isinstance(memory_map, dict):
+            memory_map = dict(memory_map)
+            policy = dict(memory_map.get("policy") or {})
+            policy["trace_level"] = "sampled"
+            memory_map["policy"] = policy
+            memory_map["trace_policy"] = {
+                "level": "sampled",
+                "rule": "every_n",
+                "params": {"every": every, "keep_special": True, "keep_tail": keep_tail},
+                "note": "未记录的指令是'未采样'，不等于'未执行'；指令总数见 run_end.instruction_count",
+            }
+            meta["memory_map"] = memory_map
+
         self._inner = Tracer(path, run_id, meta)
         self.run_id = run_id
         self.path = self._inner.path
         self.every = every
-        self.keep_event_insns = keep_event_insns
-        self.keep_stub_insns = keep_stub_insns
+        self.keep_tail = max(0, int(keep_tail))
+        #: 最近 keep_tail 行指令（停下时补写，保证停机现场完整）
+        self._tail: list[dict] = []
         self.stats = {
             "trace_level": "sampled",
             "sample_every": every,
+            "keep_tail": self.keep_tail,
             "instructions_executed": 0,
             "instructions_written": 0,
             "skipped_by_sampling": 0,
-            "kept_due_to_event": 0,
             "kept_due_to_stub": 0,
+            "kept_due_to_csr": 0,
+            "kept_due_to_hypothesis": 0,
+            "kept_due_to_interval": 0,
+            "kept_from_tail": 0,
         }
+        if trace_policy_sink is not None:
+            trace_policy_sink.update(meta.get("memory_map", {}).get("trace_policy") or {})
 
     # ---- Tracer 接口 ----
 
@@ -113,28 +149,61 @@ class SampledTracer:
         seq = int(cur.get("seq") or 0)
         mem = cur.get("mem_access")
         has_stub = isinstance(mem, dict) and bool(mem.get("stub"))
-        has_event = isinstance(mem, dict) or bool(cur.get("csrs_changed"))
+        has_csr = bool(cur.get("csrs_changed"))
+        is_hyp = cur.get("evidence_level") == "hypothesis"
 
-        keep = (seq % self.every == 0)
-        if not keep and self.keep_stub_insns and has_stub:
-            keep = True
-            self.stats["kept_due_to_stub"] += 1
-        elif not keep and self.keep_event_insns and has_event:
-            keep = True
-            self.stats["kept_due_to_event"] += 1
+        # 契约 §5 keep_special：以下行永不因抽样丢弃
+        keep_reason = None
+        if has_stub:
+            keep_reason = "kept_due_to_stub"
+        elif has_csr:
+            keep_reason = "kept_due_to_csr"
+        elif is_hyp:
+            keep_reason = "kept_due_to_hypothesis"
+        elif seq % self.every == 0:
+            keep_reason = "kept_due_to_interval"
 
-        if keep:
+        if keep_reason:
             self._inner.flush_insn()
             self.stats["instructions_written"] += 1
+            self.stats[keep_reason] += 1
+            if self.keep_tail:
+                self._tail.append(cur)
+                if len(self._tail) > self.keep_tail:
+                    self._tail.pop(0)
         else:
-            self._inner._cur = None  # 丢弃该行（事件已计入 kept_due_to_* 统计）
+            self._inner._cur = None  # 丢弃该行（不是"未执行"）
             self.stats["skipped_by_sampling"] += 1
+            if self.keep_tail:
+                self._tail.append(cur)
+                if len(self._tail) > self.keep_tail:
+                    self._tail.pop(0)
+
+    def _flush_tail(self) -> None:
+        """停机时补写最后 N 条指令行（保证停机现场可见；可能重复已写行，去重）。"""
+        if not self.keep_tail or not self._tail:
+            return
+        written_seqs = getattr(self, "_written_seqs", None)
+        if written_seqs is None:
+            written_seqs = set()
+            self._written_seqs = written_seqs
+        for row in self._tail:
+            seq = int(row.get("seq") or 0)
+            if seq in written_seqs:
+                continue
+            written_seqs.add(seq)
+            self._inner._cur = row
+            self._inner.flush_insn()
+            self.stats["instructions_written"] += 1
+            self.stats["kept_from_tail"] += 1
+        self._tail = []
 
     def fault_event(self, **kwargs) -> None:
         self._inner.flush_insn()
         self._inner.fault_event(**kwargs)
 
     def run_end(self, *args, **kwargs) -> None:
+        self._flush_tail()   # 停机现场补写（契约 §5：exit 前最后 N 条必留）
         self._inner.flush_insn()
         self._inner.run_end(*args, **kwargs)
 

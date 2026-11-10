@@ -1,0 +1,607 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fi-converters.invalid/contracts/v0.1/live-experiment.schema.json",
+  "title": "LiveExperiment v0.3（实机实验记录）",
+  "description": "承载**实机（PowerShorter 等物理毛刺设备）**的一次实验记录。**最重要的纪律：实机数据属 Captured State，必须与 Simulated State 严格分开**——本契约用 `state_origin` 字段（const observation_source=\"captured\"）+ `simulated_comparison` **独立对象**承载仿真对照，禁止把仿真推断写进观测字段。字段：experiment_id / target_chip / baseline_ref / params{delay_raw,pulse_raw,unit_scale,pattern 原样} / observation{frame_bytes,code,state_label,responded} / classification{kind,label 五色} / safety{limits,max_injections,stopped} / raw_logs_ref / captured_state。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "state_origin",
+    "target_chip",
+    "params",
+    "observation",
+    "classification",
+    "safety",
+    "confidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "$ref": "common.defs.json#/$defs/schema_version" },
+
+    "experiment_id": {
+      "$ref": "common.defs.json#/$defs/id",
+      "description": "本次实机实验唯一 ID。",
+      "examples": ["live-20261110-0001"]
+    },
+
+    "state_origin": {
+      "type": "string",
+      "const": "captured",
+      "description": "**数据来源常量（必填，防混淆）**：实机实验记录恒为 `captured`（真实采集）。仿真推断必须放在 `simulated_comparison` 对象里，且其 state_origin 为 `simulated`。这条与需求增量 §2（Captured/Reconstructed/Simulated 三源分开）一致。",
+      "examples": ["captured"]
+    },
+
+    "target_chip": {
+      "type": "object",
+      "description": "被测芯片标识（不内置任何芯片常量，全部由调用方给出）。",
+      "required": ["chip_id"],
+      "additionalProperties": false,
+      "properties": {
+        "chip_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "芯片稳定 ID（与 Chip Profile 的 profile_id 同命名空间）。",
+          "examples": ["sample-chip"]
+        },
+        "profile_ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "引用的 Chip Profile ID；未建立画像写 unknown。",
+          "examples": ["sample-chip", "unknown"]
+        },
+        "image_ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "本次运行固件镜像标识（路径或指纹）；未记录写 unknown。",
+          "examples": ["firmware.bin", "unknown"]
+        },
+        "image_sha256": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "固件镜像 SHA-256（防固件漂移的关键字段）。",
+          "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "unknown"]
+        },
+        "mode": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "芯片运行模式（ISP / bootloader / APP / RTOS）。",
+          "examples": ["ISP", "unknown"]
+        }
+      },
+      "examples": [
+        {
+          "chip_id": "sample-chip",
+          "profile_ref": "unknown",
+          "image_ref": "firmware.bin",
+          "image_sha256": "unknown",
+          "mode": "ISP"
+        }
+      ]
+    },
+
+    "baseline_ref": {
+      "type": "object",
+      "description": "基线对照引用（不注入时的同一流程观测）。分类判定的『预期值』来自基线，必须可追溯。",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["same_chip_baseline_run", "reference_dataset", "simulation_baseline", "none", "unknown"],
+          "description": "基线来源种类：same_chip_baseline_run=同芯片正常跑；reference_dataset=历史数据集；simulation_baseline=仿真基线（**属 Simulated**）；none=无基线；unknown=未声明。",
+          "examples": ["same_chip_baseline_run", "reference_dataset"]
+        },
+        "ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "基线引用（运行 ID / 文件路径 / 数据行范围）。",
+          "examples": ["run-baseline-0001", "unknown"]
+        },
+        "expected_frame_bytes": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "基线帧字节（hex）——分类时『目标寄存器/帧是否正确』的比对依据。",
+          "examples": ["464c0105", "unknown"]
+        },
+        "expected_code": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "基线错误码（原样字面量）。",
+          "examples": ["0x<CODE_A>", "unknown"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "基线本身的证据等级（真实采集=observation；仿真基线只能 hypothesis）。",
+          "examples": ["observation", "hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "kind": "same_chip_baseline_run",
+          "ref": "run-baseline-0001",
+          "expected_frame_bytes": "464c0105",
+          "expected_code": "0x<CODE_A>",
+          "confidence": "observation"
+        }
+      ]
+    },
+
+    "params": {
+      "type": "object",
+      "description": "注入参数（设备侧原样回执）。**单位必须显式**：`unit_scale` 记录 raw→ns 换算，禁止隐式假设。",
+      "required": ["delay_raw", "pulse_raw", "unit_scale", "pattern"],
+      "additionalProperties": false,
+      "properties": {
+        "delay_raw": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "触发延迟（设备原始刻度）。",
+          "examples": [3160]
+        },
+        "pulse_raw": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "毛刺宽度（设备原始刻度）。",
+          "examples": [2]
+        },
+        "delay_ns": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "换算后的延迟 ns（= delay_raw × unit_scale）。",
+          "examples": [31600, "unknown"]
+        },
+        "pulse_ns": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "换算后的脉宽 ns（= pulse_raw × unit_scale）。",
+          "examples": [20, "unknown"]
+        },
+        "unit_scale": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "**必填**：raw→ns 换算比例（PowerShorter 设备语义为 10，即 duration 单位 = 10ns）。来源必须可追溯（见 unit_source）。",
+          "examples": [10]
+        },
+        "unit_source": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "换算比例的依据来源（设备文档/实测标定），避免『隐式假设』。",
+          "examples": ["power_shorter.engine_cfg docstring: duration is in unit of 10ns"]
+        },
+        "pattern": {
+          "type": "array",
+          "description": "**设备 pattern 原样回执**（[(level, duration), ...]，level 0=断开供电即毛刺、1=导通；最多 8 段）。原样保留供审计与复现，不得重排或合并。",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "integer", "minimum": 0 },
+            "description": "[level, duration] 二元组。",
+            "examples": [[1, 3160], [0, 2]]
+          },
+          "examples": [[[1, 3160], [0, 2], [1, 1]]]
+        },
+        "engine": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "使用的注入引擎通道标识（设备原样）。",
+          "examples": ["E1", "unknown"]
+        },
+        "trigger_mode": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "触发模式（设备原样，如 RISE）。",
+          "examples": ["RISE", "unknown"]
+        },
+        "device": {
+          "type": "object",
+          "description": "注入设备标识（型号/接口/固件版本），可复现性要求。",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "设备名/型号。",
+              "examples": ["PowerShorter", "unknown"]
+            },
+            "interface": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "连接接口（串口路径等）。",
+              "examples": ["/dev/ttyUSB0", "unknown"]
+            },
+            "version": {
+              "$ref": "common.defs.json#/$defs/string_or_unknown",
+              "description": "驱动/固件版本。",
+              "examples": ["unknown"]
+            }
+          },
+          "examples": [{ "name": "PowerShorter", "interface": "/dev/ttyUSB0", "version": "unknown" }]
+        }
+      },
+      "examples": [
+        {
+          "delay_raw": 3160,
+          "pulse_raw": 2,
+          "delay_ns": 31600,
+          "pulse_ns": 20,
+          "unit_scale": 10,
+          "unit_source": "power_shorter.engine_cfg docstring: duration is in unit of 10ns",
+          "pattern": [[1, 3160], [0, 2], [1, 1]],
+          "engine": "E1",
+          "trigger_mode": "RISE",
+          "device": { "name": "PowerShorter", "interface": "/dev/ttyUSB0", "version": "unknown" }
+        }
+      ]
+    },
+
+    "observation": {
+      "type": "object",
+      "description": "实机观测结果（**Captured State**）。所有字段来自真实捕获，未经仿真推断修饰。",
+      "required": ["responded"],
+      "additionalProperties": false,
+      "properties": {
+        "frame_bytes": {
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{2})*$",
+          "description": "捕获到的响应帧原始字节（hex，偶数长度）；无帧写空串或省略。",
+          "examples": ["464c0105"]
+        },
+        "code": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "响应错误码（数据源原样字面量）。",
+          "examples": ["0x<CODE_A>", "unknown"]
+        },
+        "state_label": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "数据源原始状态标签（语义见 status-semantics.md；不得据标签语义做业务判断）。",
+          "examples": ["FL", "HANG", "unknown"]
+        },
+        "state_label_semantics": {
+          "type": "string",
+          "const": "unconfirmed-v0.1",
+          "description": "状态标签语义常量（沿用契约既有口径：标签语义未经用户确认）。",
+          "examples": ["unconfirmed-v0.1"]
+        },
+        "responded": {
+          "type": "boolean",
+          "description": "是否记录到响应 token（观测级机械事实，定义同 campaign-record.response.responded）。",
+          "examples": [true, false]
+        },
+        "pc": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "捕获到的 PC（若设备/固件支持）；不可得写 unknown。",
+          "examples": [553648260, "unknown"]
+        },
+        "regs": {
+          "$ref": "common.defs.json#/$defs/object_or_unknown",
+          "description": "捕获到的寄存器快照（{reg: value}）；不可得写 unknown。",
+          "examples": [{ "a0": 553648260 }, "unknown"]
+        },
+        "uart_text": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "捕获的串口文本（原始，未解释）。",
+          "examples": ["boot ok", "unknown"]
+        },
+        "captured_at": {
+          "$ref": "common.defs.json#/$defs/timestamp",
+          "description": "捕获时刻。",
+          "examples": ["2026-11-10T09:15:00+08:00", "unknown"]
+        },
+        "capture_completeness": {
+          "type": "string",
+          "enum": ["full", "partial", "minimal", "unknown"],
+          "description": "采集完整性（需求增量 §2 要求记录）：full=寄存器/栈/内存快照齐全；partial=部分；minimal=仅响应码；unknown=未评估。UI 应据此提示『现场不完整』。",
+          "examples": ["partial", "minimal"]
+        }
+      },
+      "examples": [
+        {
+          "frame_bytes": "464c0105",
+          "code": "0x<CODE_A>",
+          "state_label": "FL",
+          "state_label_semantics": "unconfirmed-v0.1",
+          "responded": true,
+          "pc": "unknown",
+          "regs": "unknown",
+          "uart_text": "unknown",
+          "captured_at": "2026-11-10T09:15:00+08:00",
+          "capture_completeness": "minimal"
+        }
+      ]
+    },
+
+    "classification": {
+      "type": "object",
+      "description": "五色分类结果（与 observation-classification 契约同口径；此处内联以便一条记录自包含）。",
+      "required": ["kind", "label", "is_interesting"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["normal", "restart", "pc_wrong", "missed_target", "target_hit"],
+          "description": "五类判定（定义见 observation-classification 契约）。",
+          "examples": ["target_hit", "normal"]
+        },
+        "label": {
+          "type": "string",
+          "enum": ["绿", "品红", "黄", "青", "红"],
+          "description": "五色标签（与 kind 一一配对）。",
+          "examples": ["红", "绿"]
+        },
+        "is_interesting": {
+          "type": "boolean",
+          "description": "是否值得深挖（仅 target_hit=true）。",
+          "examples": [true, false]
+        },
+        "basis": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "分类依据说明（PC 是否对、目标寄存器是否对、是否重启）。",
+          "examples": ["PC 正确但目标寄存器值与基线不符"]
+        },
+        "confidence": {
+          "$ref": "common.defs.json#/$defs/evidence_level",
+          "description": "分类结论的证据等级（对已捕获观测的机械比对=observation）。",
+          "examples": ["observation"]
+        }
+      },
+      "examples": [
+        {
+          "kind": "target_hit",
+          "label": "红",
+          "is_interesting": true,
+          "basis": "PC 正确但目标寄存器值与基线不符",
+          "confidence": "observation"
+        }
+      ]
+    },
+
+    "safety": {
+      "type": "object",
+      "description": "安全护栏状态（**实机记录必填**：出过什么事必须可查）。",
+      "required": ["limits", "max_injections", "stopped"],
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "type": "object",
+          "description": "本次生效的安全上限（不得无声放宽；与实现默认值不同时必须显式记录）。",
+          "required": ["max_pulse_raw"],
+          "additionalProperties": false,
+          "properties": {
+            "max_pulse_raw": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "单次脉宽上限（raw 刻度）。",
+              "examples": [100]
+            },
+            "max_pulse_ns": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "单次脉宽上限（ns）。",
+              "examples": [1000, "unknown"]
+            },
+            "max_consecutive_failures": {
+              "$ref": "common.defs.json#/$defs/uint_or_unknown",
+              "description": "连续失败熔断阈值。",
+              "examples": [20, "unknown"]
+            }
+          },
+          "examples": [
+            { "max_pulse_raw": 100, "max_pulse_ns": 1000, "max_consecutive_failures": 20 }
+          ]
+        },
+        "max_injections": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本轮允许的最大注入次数。",
+          "examples": [10000]
+        },
+        "n_injections": {
+          "$ref": "common.defs.json#/$defs/uint_or_unknown",
+          "description": "实际注入次数。",
+          "examples": [1, "unknown"]
+        },
+        "stopped": {
+          "type": "boolean",
+          "description": "是否触发过紧急停止/熔断（true ⇒ UI 必须显示安全警示，且后续注入需人工解除）。",
+          "examples": [false, true]
+        },
+        "stop_reason": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "停止原因（脉宽超限/次数超限/连续失败/人工急停）；未停止写 unknown。",
+          "examples": ["连续失败熔断（20 次）", "unknown"]
+        },
+        "safety_violations": {
+          "type": "array",
+          "description": "本次触发的安全违规记录（空数组=无）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [[], ["脉宽超限: pulse_raw=150 > 上限 100"]]
+        }
+      },
+      "examples": [
+        {
+          "limits": { "max_pulse_raw": 100, "max_pulse_ns": 1000, "max_consecutive_failures": 20 },
+          "max_injections": 10000,
+          "n_injections": 1,
+          "stopped": false,
+          "stop_reason": "unknown",
+          "safety_violations": []
+        }
+      ]
+    },
+
+    "raw_logs_ref": {
+      "$ref": "common.defs.json#/$defs/data_ref",
+      "description": "原始日志/捕获文件引用（设备日志、串口 dump）。原始数据只读，派生另存。",
+      "examples": [
+        { "kind": "log", "path": "examples/live/runs/2026-11-10/live-0001/uart.log", "checksum": "unknown" }
+      ]
+    },
+
+    "captured_state": {
+      "type": "object",
+      "description": "**Captured State 块（实机数据强制标记）**：与 Simulated/Reconstructed 严格分开。凡进此块的数据必须是真实采集的原始量。",
+      "required": ["origin", "capture_method"],
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "type": "string",
+          "const": "captured",
+          "description": "来源常量：实机捕获恒为 captured。",
+          "examples": ["captured"]
+        },
+        "capture_method": {
+          "type": "string",
+          "enum": ["uart", "trap", "crash_dump", "debug", "trace", "external", "unknown"],
+          "description": "捕获通道（与 provider_name 词汇对齐）。",
+          "examples": ["uart", "external"]
+        },
+        "provider": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "执行捕获的 Provider 实现标识。",
+          "examples": ["uart-real-v0", "unknown"]
+        },
+        "fields_captured": {
+          "type": "array",
+          "description": "实际采集到的字段清单（用于采集完整性核对；缺哪个一目了然）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["frame_bytes", "code", "responded"]]
+        },
+        "fields_missing": {
+          "type": "array",
+          "description": "本次未能采集的字段清单（显式登记失败项，不留空白）。",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["pc", "regs"]]
+        }
+      },
+      "examples": [
+        {
+          "origin": "captured",
+          "capture_method": "uart",
+          "provider": "uart-real-v0",
+          "fields_captured": ["frame_bytes", "code", "responded"],
+          "fields_missing": ["pc", "regs"]
+        }
+      ]
+    },
+
+    "simulated_comparison": {
+      "type": "object",
+      "description": "仿真对照（**Simulated State，独立对象，禁止与观测字段混写**）：把本次实机参数喂给仿真，看仿真预测什么。用于验证『仿真是否可信』，而非修饰观测。",
+      "required": ["origin"],
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "type": "string",
+          "const": "simulated",
+          "description": "来源常量：仿真恒为 simulated。",
+          "examples": ["simulated"]
+        },
+        "run_ref": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "仿真运行件引用（trace/run_id）。",
+          "examples": ["run-sim-0001", "unknown"]
+        },
+        "predicted_code": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "仿真预测的响应码。",
+          "examples": ["0x<CODE_A>", "unknown"]
+        },
+        "predicted_frame_bytes": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "仿真预测的帧字节。",
+          "examples": ["464c0105", "unknown"]
+        },
+        "matches_observation": {
+          "$ref": "common.defs.json#/$defs/boolean_or_unknown",
+          "description": "仿真是否复现实机观测（true=模型在该点可信；false=模型有缺口，是重要结论）。",
+          "examples": [true, false, "unknown"]
+        },
+        "divergence_note": {
+          "$ref": "common.defs.json#/$defs/string_or_unknown",
+          "description": "不一致说明（差在哪、可能是模型哪个假设错了）。",
+          "examples": ["仿真未建模 UART 缓冲时序，码值一致但帧长度不同"]
+        },
+        "confidence": {
+          "type": "string",
+          "const": "hypothesis",
+          "description": "仿真对照恒 hypothesis（仿真≠实测）。",
+          "examples": ["hypothesis"]
+        }
+      },
+      "examples": [
+        {
+          "origin": "simulated",
+          "run_ref": "run-sim-0001",
+          "predicted_code": "0x<CODE_A>",
+          "predicted_frame_bytes": "464c0105",
+          "matches_observation": true,
+          "divergence_note": "unknown",
+          "confidence": "hypothesis"
+        }
+      ]
+    },
+
+    "confidence": {
+      "$ref": "common.defs.json#/$defs/evidence_level",
+      "description": "记录整体证据等级：实机观测事实=observation（默认）；若基线/分类依据本身不可靠则降级。**注意**：本字段只评『记录本身』，不评解释；解释走 fault-explanation（恒 hypothesis）。",
+      "examples": ["observation", "hypothesis"]
+    },
+
+    "notes": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "备注（现场观察、异常现象、下一步）。",
+      "examples": ["首次实机跑通；捕获完整性 minimal，建议下次接 trap 通道"]
+    },
+
+    "operator": {
+      "$ref": "common.defs.json#/$defs/string_or_unknown",
+      "description": "实验执行者/审批标识（合规与审计要求）。",
+      "examples": ["ai-agent-approved-window", "unknown"]
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "不变量 1：状态标签带语义常量 ⇒ 该记录必须同样声明（防漏标 unconfirmed）。",
+      "if": {
+        "properties": { "observation": { "required": ["state_label"] } },
+        "required": ["observation"]
+      },
+      "then": {
+        "properties": {
+          "observation": {
+            "properties": { "state_label_semantics": { "const": "unconfirmed-v0.1" } }
+          }
+        }
+      }
+    },
+    {
+      "description": "不变量 2：safety.stopped=true ⇒ 必须给 stop_reason（安全事件必须可追因）。",
+      "if": {
+        "properties": {
+          "safety": {
+            "properties": { "stopped": { "const": true } },
+            "required": ["stopped"]
+          }
+        },
+        "required": ["safety"]
+      },
+      "then": { "properties": { "safety": { "required": ["stop_reason"] } } }
+    },
+    {
+      "description": "不变量 3：classification.kind=target_hit ⇒ is_interesting 必须 true 且 label『红』（与 observation-classification 同规则）。",
+      "if": {
+        "properties": {
+          "classification": {
+            "properties": { "kind": { "const": "target_hit" } },
+            "required": ["kind"]
+          }
+        },
+        "required": ["classification"]
+      },
+      "then": {
+        "properties": {
+          "classification": {
+            "properties": {
+              "is_interesting": { "const": true },
+              "label": { "const": "红" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "不变量 4：params 给了 pattern ⇒ pattern 段数 ≤ 8（设备硬限制，超了会静默失败）。",
+      "properties": {
+        "params": { "properties": { "pattern": { "maxItems": 8 } } }
+      }
+    }
+  ]
+}

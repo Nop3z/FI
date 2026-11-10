@@ -6,17 +6,7 @@ build/
 dist/
 .venv/
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
 
-# 数据与运行产物（原始固件、实验数据、派生数据一律不入库）
-*.bin
-*.csv
+# 派生数据（原始 ROM / CSV 只读，派生数据另存，不进版本库）
 data/derived/
-runs/
-output/
-*.jsonl
-
-# 本机配置
-*.local.json
-.env
+output/*.jsonl

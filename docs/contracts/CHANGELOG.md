@@ -5,7 +5,216 @@
 所有变更必须附 **Dashboard 影响** 小节（新增/变更字段、新数据文件类型、版本 bump），
 本文件是 Web/Dashboard 团队同步的权威渠道。
 
-## [0.3.0] - Unreleased（逆向先行基线批次）
+## [0.5.0] - 2026-11-10（实机接入与可检验证据批次）
+
+**变更类型：minor bump（向后兼容新增 + 一处可选节 patch 级登记）。**
+触发：① 用户预告提供 PowerShorter 实机 → 实机实验记录必须有契约（Captured State 与
+Simulated State 严格分开）；② chip-profile-ds 发现并修正一个会导致**注入静默失效**的
+真实 bug（机器码位 vs 寄存器值位混淆）→ 把它变成 schema 层强制的防坑字段。
+
+### Added（新增契约）
+
+- `schemas/bitflip-evidence.schema.json` —— **BitflipEvidence 位翻转关键证据**
+  （**进 Web 契约，UI 展示核心证据**；`data/derived/injection-targets.json` 属闭环内部
+  输入，不进 Web 契约）。
+  结构：`title/tool/image/one_sentence/entries[]/code_pair_index[]/counts/how_to_read/
+  discipline/confidence/evidence_kind`；`entries[]` 每条含
+  `evidence_id/summary/claim/technical_chain/experimental_context/falsifiable_prediction/
+  confidence/evidence_kind`。
+
+  **两个防坑字段（schema 层强制，血泪教训）**：
+  1. `claim.bit_mask_on_reg_value`（**必填**）—— 注入时施加在**寄存器值**上的位掩码；
+  2. `claim.mask_applies_to`（**必填，`const "post_insn_reg_value"`**）—— 明确掩码
+     作用于「指令执行后的寄存器值」，不是机器码、不是指令字节。
+
+  **语义不变量（`fi.schemas.invariants` 强制，违反即拒）**：
+  - `bit_mask_on_reg_value == source_code XOR target_code` 的位掩码
+    （掩码写错立即拒，并给出"I-type 中机器码位 b ↔ 立即数位 b-20"的提示）；
+  - `flipped_reg_value_bits` 的位集合必须与 `source XOR target` 的位集合一致；
+  - `flipped_machine_code_bits` 与 `flipped_reg_value_bits` 不得完全相同
+    （相同即把两套位搞混）；
+  - `falsifiable_prediction.injection.bit_mask` / `.mask_applies_to` 必须与 `claim`
+    同源（这是真正喂给注入器的字段，最易被手工改错）。
+
+  **证据分级强制分字段（防 UI 混渲级别）**：`claim.confidence` 恒 `hypothesis`
+  （预测）；`experimental_context.*.count` 属 `observation`（观测）。
+  两者**不得混成一个数字展示**——历史 bug 正是"看起来像事实的预测"。
+  背景：`fi.fault.effects` 枚举的是**指令机器码位**，注入翻转的是**寄存器值位**；
+  拿机器码位当注入掩码（如 `0x40000000`）会翻到无关高位：码值不变、注入静默失效且不报错。
+
+- `schemas/live-experiment.schema.json` —— **LiveExperiment 实机实验记录**。
+  字段：`experiment_id / state_origin（const captured）/ target_chip{chip_id,profile_ref,
+  image_ref,image_sha256,mode} / baseline_ref{kind,ref,expected_frame_bytes,expected_code} /
+  params{delay_raw,pulse_raw,delay_ns,pulse_ns,unit_scale,unit_source,pattern 原样回执,
+  engine,trigger_mode,device} / observation{frame_bytes,code,state_label,
+  state_label_semantics,responded,pc,regs,uart_text,captured_at,capture_completeness} /
+  classification{kind,label,is_interesting,basis} / safety{limits,max_injections,
+  n_injections,stopped,stop_reason,safety_violations} / raw_logs_ref / captured_state /
+  simulated_comparison / confidence / operator`。
+
+  **Captured State 标注（本契约最重要的纪律）**：实机数据必须与仿真严格分开——
+  - `state_origin` 与 `captured_state.origin` 恒为 `captured`；
+  - 仿真对照只能放**独立对象** `simulated_comparison`，其 `origin` 恒 `simulated`、
+    `confidence` 恒 `hypothesis`；
+  - 语义不变量：`observation` 块出现 `predicted_*`/`simulated` 系字段即拒
+    （禁止把仿真推断写进观测字段）。
+
+  其他不变量：`unit_scale` 正整数必填且 `delay_ns/pulse_ns` 必须等于
+  `raw × unit_scale`（换算对不上=手工算错，拒）；`pattern` 段数 ≤ 8（设备硬限制，
+  超限会静默失效）；`safety.stopped=true` ⇒ 必须给 `stop_reason`；
+  `pulse_raw` 不得超 `safety.limits.max_pulse_raw`。
+
+### Changed（patch 级登记）
+
+- `fi/profiles/schema/chip-profile-v0.1.schema.json`（chip-profile 维护，本文件仅登记）
+  —— 新增**可选节** `injection_targets` + `$defs.injectionTarget`。
+  **纯新增、向后兼容**，存量 Profile 不受影响，无需迁移（建议按 patch 级记录）。
+
+### Changed（文档实测数字补录）
+
+- `docs/contracts/trace-levels.md` 新增 §3.1 **实测达标节**：采样/二进制模式下轨迹
+  体积实测 **3.98 B/指令**，达成 `docs/tts-baseline.md` §3 的「≤ 8 B/指令」目标
+  （对比 full 模式约 262 B/指令，约 66× 缩减）。该数字来自 `fi.sim` 轨迹分级实测，
+  用于回答"日常扫描跑得动吗"。
+
+### 未变更（明确声明）
+
+- `schema_version` 常量仍为 `"0.2"`：本批全部为向后兼容新增，存量实例不受影响。
+- 动作词汇表不动：`bitflip-evidence.falsifiable_prediction.injection.action` 沿用
+  发现层语义名 `skip_insn`/`flip_reg_bits`（与契约 README §6.1 的映射表一致）。
+
+### Dashboard 影响
+
+- **新增契约 2 个（均 `.json` 单实例，无新文件后缀）**：
+  - `bitflip-evidence` → **位翻转证据卡片**：码对卡片（A→B）+ 翻转位数徽标 +
+    两码实验出现次数（**必须标为 observation，与 hypothesis 的预测视觉上分开**）+
+    `hypothesis` 标识 + 可证伪判据折叠区（`falsifiable_prediction`：
+    支持条件/推翻条件/阴性对照）。
+    **严禁**把 `claim`（预测）与 `experimental_context.count`（观测）渲染成同一个
+    数值块，也不得省略"这是预测"的标注。
+  - `live-experiment` → **实机实验页**：Captured 徽标（`state_origin=captured`）、
+    五色分类徽标（`classification.label`）、安全状态条（`safety.stopped` 红色警示 +
+    `safety_violations`）、采集完整性提示（`observation.capture_completeness`：
+    minimal/partial 时提示"现场不完整"）、以及**仿真对照分栏**
+    （`simulated_comparison` 必须与观测分区展示，不得混排）。
+- **新增字段（向后兼容）**：Profile schema 的 `injection_targets` 可选节。
+- **新增展示语义**：位翻转"寄存器掩码 vs 机器码位"提示（UI 若展示位位置，
+  须同时标 `mask_applies_to=post_insn_reg_value`）；实机/仿真来源徽标；
+  安全停机上报告警。
+- **轨迹体积指标**：`trace-levels.md` 实测 3.98 B/指令（≤8 B 目标达标），
+  Dashboard 效率页可直接引用该数字与 full 模式对比。
+- **契约版本变化**：`[0.5.0]` minor（向后兼容新增）；实例 `schema_version` 仍 `"0.2"`。
+
+## [0.4.0] - 2026-11-10（故障效果推演批次：从"打中哪条指令"到"为什么是这个观测"）
+
+**变更类型：minor bump（向后兼容新增）。**
+触发：用户要求对齐 hn security《Fault Injection - Down the Rabbit Hole》方法论
+（`docs/methodology-fault-effect-reasoning.md`）——不只要"打中哪条指令"，还要
+"指令被打坏后变成什么、为什么产生这个观测"。方法论七步中的第 5-7 步
+（五色分类 / 位翻转假设 / 仿真复现解释）需要数据契约承载。
+
+### Added（新增契约 3 个）
+
+- `schemas/fault-effect.schema.json` —— **FaultEffect 位翻转效果枚举**。
+  `original_insn{bytes_hex,addr,disasm}` + `physical_assumption{flip_mode
+  (one_to_zero|zero_to_one|both),max_flips,fault_level,confidence}` +
+  `variants[]{flipped_bit_positions[],mutated_code_hex,mutated_insn,change_kind
+  (same|rd_changed|rs_changed|imm_changed|opcode_changed|undecodable|nop_like),
+  semantics_changed,raw_diff_hex}` + `summary{by_change_kind,n_variants_total,
+  n_variants_semantically_changed,enumeration_complete,reason}`。
+  **强制**：报告级/变体级 `confidence` 均 `const "hypothesis"`（变体是候选解释，
+  不是已证实物理过程；禁 fact/observation）。
+  语义不变量：位位置不得越出指令位宽；`change_kind=undecodable ⇔ mutated_insn=unknown`；
+  `semantics_changed` 与 `change_kind` 一致；`mutated_code_hex` 与原始指令等长；
+  `variants` 为空必须给 `summary.reason`。
+
+- `schemas/fault-explanation.schema.json` —— **FaultExplanation 观测反解**。
+  `observation{regs,pc,source} / pre_state{regs,origin(captured|reconstructed|
+  simulated|assumed),confidence} / target_insn / physical_assumption /
+  candidates[]{flipped_bit_positions,mutated_insn,mutated_code_hex,change_kind,
+  predicted_regs,match_score,match_detail,eval_status,simulation} /
+  simulation_verification{executed,matches_observation,exception,n_variants_tested,
+  n_matched,engine} / summary{multiple_solutions,n_candidates,...} / reason /
+  discipline / confidence / evidence_kind`。
+  **允许多解且强制全部列出**（方法论明确：多个损坏指令可产生同一观测，
+  只报一个会误导结论）：
+  - `summary.multiple_solutions=true` ⇒ `candidates` 至少 2 条（schema + 语义双强制）；
+  - `multiple_solutions=false` 时不得有多条候选（标志与明细必须一致）；
+  - `candidates` 为空 ⇒ 必须给 `reason`（且不得写 unknown）；
+  - `summary.n_candidates` 必须等于实际条数；
+  - `simulation_verification.executed=false` ⇒ `matches_observation` 不得为 true。
+  `confidence` 恒 `hypothesis`（候选解释，非已证实机理）。
+
+- `schemas/observation-classification.schema.json` —— **ObservationClassification
+  观测五色分类**（方法论第 5 步）。
+  `kind ∈ {normal, restart, pc_wrong, missed_target, target_hit}` +
+  `label ∈ {绿, 品红, 黄, 青, 红}` + `is_interesting` + `evidence{pc_ok,target_reg_ok,
+  other_regs_changed,restarted,target_reg,expected_regs,observed_regs,source}` +
+  `next_action` + `experiment_ref` + `target_feature_ref`。
+  **`confidence` 恒 `observation`**（对已捕获观测的机械比对，不是推断——
+  "为什么"走 fault-explanation，那份恒 hypothesis）。
+  语义不变量：`kind ↔ label` 固定配对（normal=绿 / restart=品红 / pc_wrong=黄 /
+  missed_target=青 / target_hit=红）；`is_interesting` 仅 `target_hit` 为 true；
+  `kind` 必须与 `evidence` 的 pc_ok/target_reg_ok/restarted/other_regs_changed 自洽。
+
+### Added（构造层 + CLI）
+
+- `fi/schemas/fault_report.py` —— 三份契约的**单一构造/归一实现**：
+  `build_fault_effect` / `build_fault_explanation` /
+  `build_observation_classification`（+ `normalize_effect_report` /
+  `normalize_reasoning_report`）。不变量前移到构造期：
+  confidence 由构造器固定、多解标志由候选数自动推导、空解自动填 reason、
+  label/is_interesting 只能由 kind 推导（调用方无权重写）。
+- `fi/fault_cli.py` + `fi/cli_plugins.py` 注册 —— **`fi fault` 命令组**：
+  - `fi fault enumerate --insn-bytes <hex> --addr <addr> [--max-flips N]
+    [--flip-mode one_to_zero|zero_to_one|both] [--include-unchanged] [--out F]`
+  - `fi fault explain --insn-bytes <hex> --addr <addr> --pre-regs <json|@file>
+    --observed-regs <json|@file> [--no-simulate] [--out F]`
+  - `fi fault classify --pc-ok|--pc-wrong --target-reg-ok|--target-reg-wrong
+    [--others-changed] [--restarted] [--target-reg a6] [--out F]`
+  三个命令产出均**过契约校验后才落盘**，不合法非零退出。
+  `@file` 读 JSON 容忍 BOM（Windows 工具常见产物）。
+
+### Changed（异常分析报告扩展）
+
+- `schemas/anomaly-report.schema.json` 新增**可选** `sections.instruction_attribution`
+  （第 7 块）：观测到的响应码 → 命令号 → handler → 装载该码的指令地址/文本。
+  字段：`schema/available/reason/codes_observed/image/command_table{source_table_addr,
+  entry_count}/summary{codes_requested,codes_attributed,total_sites,handler_count}/
+  attributions[]{code,status,site_count,handler_count,sites[]{insn_addr,insn,command,
+  handler,dest_reg}}/method_boundaries/discipline/confidence/evidence_kind`。
+  **换芯片零改动**：镜像路径、基址、码值全部来自调用参数，本块不内置任何芯片常量；
+  缺镜像/缺基址/无 hex 码时以 `available=false` + `reason` 明确登记，不推测。
+  **向后兼容**：该节为可选，未产出该节的既有报告仍合法。
+
+### 未变更（明确声明）
+
+- `schema_version` 常量仍为 `"0.2"`：本批全部为向后兼容新增。
+- `state_label_semantics` 仍 `unconfirmed-v0.1`。
+
+### Dashboard 影响
+
+- **新增契约 3 个（均 `.json` 单实例，无新文件后缀）**：
+  - `fault-effect` → "位翻转枚举页"：原指令卡片 + 物理假设徽标
+    （`flip_mode`/`max_flips` 必须显示，否则读者会误解枚举范围）+
+    变体表（按 `change_kind` 分组，`undecodable` 与 `nop_like` 单独标色）+
+    `summary.by_change_kind` 分布图。**所有变体必须标 hypothesis**。
+  - `fault-explanation` → "观测反解页"：观测/前置状态卡片 + **候选列表（多解时必须
+    全部展示，禁止只显示第一条）** + 每条候选的 `flipped_bit_positions` /
+    `mutated_insn` / `predicted_regs` / `match_score` + 仿真验证状态
+    （`executed=false` 时要明确标"未仿真验证"）。
+  - `observation-classification` → **五色分类徽标**（绿/品红/黄/青/红）：
+    仅红色（`target_hit`）进"值得深挖"队列；青色需提示"打到别处"；
+    品红需提示"毛刺过长"；`next_action` 可直接渲染为操作建议。
+- **新增展示语义**：统计警示条（`statistical_caveats` 四项：
+  非平稳/设计看不见窗口/稀疏标签不可靠/时间混杂）——数据非平稳时必须常驻提示；
+  时间估算必带频率假设（v0.3 已定，此处重申）。
+- **新增可选节（向后兼容）**：`anomaly-report.sections.instruction_attribution`
+  → UI 可加"指令级归因"折叠面板（码 → 命令 → handler → 装载指令），
+  未提供镜像时显示"未做指令级归因（缺镜像/基址）"而非空白。
+- **契约版本变化**：`[0.4.0]` minor（向后兼容新增）；实例 `schema_version` 仍 `"0.2"`。
+
+## [0.3.0] - 2026-11-09（逆向先行基线批次，已定版）
 
 **变更类型：minor bump（向后兼容新增；`schema_version` 常量未动，仍为 `"0.2"`）。**
 触发：2026-11-09 用户纠偏「逆向先行」（`docs/methodology-reverse-first.md`）——
@@ -274,3 +483,5 @@
 [0.1]: https://example.invalid/fi-contracts/0.1
 [0.2.0]: https://example.invalid/fi-contracts/0.2.0
 [0.3.0]: https://example.invalid/fi-contracts/0.3.0
+[0.4.0]: https://example.invalid/fi-contracts/0.4.0
+[0.5.0]: https://example.invalid/fi-contracts/0.5.0

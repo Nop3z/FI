@@ -52,9 +52,26 @@ def _write_or_print(report: dict, out: str | None, *, summary_only: bool = False
 
 def _print_summary(report: dict) -> None:
     """通用人类可读摘要（各子命令共享外壳，字段按存在与否打印）。"""
-    img = report.get("image", {})
-    print(f"image   : {img.get('path')}  base={img.get('base_address_hex')}  "
-          f"size={img.get('size_bytes')} B  sha256={(img.get('sha256') or '')[:16]}…")
+    img = report.get("image") or {}
+    if img:
+        print(f"image   : {img.get('path')}  base={img.get('base_address_hex')}  "
+              f"size={img.get('size_bytes')} B  sha256={(img.get('sha256') or '')[:16]}…")
+    # ---- 可用性自评（放在最前，防止在噪声输入上误读结果）----
+    ua = report.get("usability_assessment")
+    if ua:
+        flag = "USABLE" if ua.get("usable") else "**NOT USABLE**"
+        print(f"usability: {flag}  assessment={ua.get('assessment')}")
+        print(f"           {ua.get('reason')}")
+        if not ua.get("usable"):
+            print(f"           ⚠ {ua.get('consumption_rule', '结果不可用')}")
+    cov = report.get("coverage")
+    if cov:
+        print(f"coverage : {cov.get('assessment')}  "
+              f"instr_coverage={cov.get('instruction_coverage_ratio')}  "
+              f"functions={cov.get('function_count')}")
+        print(f"           {cov.get('reason')}")
+        if cov.get("assessment", "").startswith("insufficient"):
+            print(f"           ⚠ {cov.get('discipline', '覆盖不足，勿当作完整调用图')}")
     if "method" in report and isinstance(report["method"], dict):
         m = report["method"]
         for key in ("target_value_mode", "min_shared_callers", "call_window"):
@@ -510,6 +527,65 @@ def _cfg_key_evidence(p: argparse.ArgumentParser) -> None:
 
 
 discover_key_evidence_cmd.configure_args = _cfg_key_evidence  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------- live-plan
+@command(DISCOVER_GROUP, "live-plan",
+         "实机注入方案（核心证据 → PowerShorter 参数 + 统计判据 + 基线对照）")
+def discover_live_plan_cmd(args: argparse.Namespace) -> int:
+    from fi.discover.live_plan import build_live_plan
+
+    try:
+        key_ev = json.loads(Path(args.key_evidence).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR 读取 --key-evidence 失败: {exc}", file=sys.stderr)
+        return 1
+
+    counts = None
+    total_rows = None
+    if args.observations:
+        try:
+            data = json.loads(Path(args.observations).read_text(encoding="utf-8"))
+            counts = (data.get("taxonomy") or {}).get("codes") or {}
+            total_rows = (data.get("taxonomy") or {}).get("n_rows")
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR 读取 --observations 失败: {exc}", file=sys.stderr)
+            return 1
+
+    timing = None
+    if args.timing:
+        try:
+            timing = json.loads(Path(args.timing).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR 读取 --timing 失败: {exc}", file=sys.stderr)
+            return 1
+
+    report = build_live_plan(
+        key_ev, observation_counts=counts, total_rows=total_rows,
+        n_delay_points=args.n_delay_points,
+        samples_per_point=args.samples_per_point,
+        timing_windows=timing, max_pulse_raw=args.max_pulse_raw,
+    )
+    return _write_or_print(report, args.out, summary_only=args.summary)
+
+
+def _cfg_live_plan(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--key-evidence", required=True, help="bitflip-key-evidence.json")
+    p.add_argument("--observations", default=None,
+                   help="实验观测统计 JSON（取 taxonomy.codes / n_rows 作背景率）")
+    p.add_argument("--timing", default=None,
+                   help="靶点时间窗口 JSON（{addr: {delay_raw_range: [lo,hi]}}），缺省则宽扫")
+    p.add_argument("--n-delay-points", type=int, default=61,
+                   help="历史数据的 delay 点数（用于折算每点背景率）")
+    p.add_argument("--samples-per-point", type=int, default=12100,
+                   help="每 delay 点采样量（统计功效计算用）")
+    p.add_argument("--max-pulse-raw", type=int, default=100,
+                   help="脉宽安全上限（10ns 单位）")
+    p.add_argument("--out", default=None, help="报告输出路径")
+    p.add_argument("--summary", action="store_true", help="只打印摘要")
+
+
+discover_live_plan_cmd.configure_args = _cfg_live_plan  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------- __main__ 支持

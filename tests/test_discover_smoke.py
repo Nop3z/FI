@@ -17,20 +17,15 @@
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 
 from fi.cli import COMMANDS, main
 from fi.schemas import DISCOVER_CONFIDENCE_ALLOWED, DISCOVER_SUGGESTED_ACTIONS, validate_instance
+from tests.smoke_env import BASE_ENV, IMAGE_ENV, find_sample_image, read_base
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-#: 冒烟用镜像：优先环境变量 FI_SMOKE_IMAGE，其次仓库根首个 *.bin（不硬编码文件名）。
-IMAGE_ENV = "FI_SMOKE_IMAGE"
-#: 冒烟用基址：优先环境变量 FI_SMOKE_BASE（0x 前缀可），否则取 0（基址只影响地址标签）。
-BASE_ENV = "FI_SMOKE_BASE"
 
 
 def _discover_command_available() -> bool:
@@ -42,19 +37,16 @@ def _discover_command_available() -> bool:
 
 
 def _smoke_image() -> Path | None:
-    env = os.environ.get(IMAGE_ENV)
-    if env:
-        p = Path(env)
-        return p if p.is_file() else None
-    candidates = sorted(REPO_ROOT.glob("*.bin"))
-    return candidates[0] if candidates else None
+    return find_sample_image()
 
 
-def _smoke_base() -> int:
-    raw = os.environ.get(BASE_ENV)
-    if not raw:
-        return 0
-    return int(raw, 0)
+def _smoke_base() -> int | None:
+    """冒烟用基址：**不默认 0**（0 对任何真实 ROM 都不是有效加载基址）。
+
+    本文件的断言只依赖形状/证据闸门（不依赖绝对地址正确性），因此缺基址时
+    允许以 0 作为地址标签跑通；这不是"默认基址"，仅表示不校验地址语义。
+    """
+    return read_base()
 
 
 @pytest.fixture()
@@ -73,7 +65,9 @@ def discover_ready() -> tuple[str, Path, int]:
     image = _smoke_image()
     if image is None:
         pytest.skip(f"未找到冒烟镜像（设置 {IMAGE_ENV} 或放一个 *.bin 到仓库根）")
-    return regions_cmd, image, _smoke_base()
+    base = _smoke_base()
+    # 本文件只校验形状/证据闸门（不校验绝对地址语义）；缺基址时用 0 仅作标签。
+    return regions_cmd, image, 0 if base is None else base
 
 
 def _run_discover_regions(cmd: str, image: Path, base: int, out_dir: Path) -> dict:
@@ -208,7 +202,7 @@ def test_module_report_shape_without_cli(module: str) -> None:
 
     from fi.schemas.discover_report import normalize_module_report
 
-    raw = fn(str(image), _smoke_base())
+    raw = fn(str(image), _smoke_base() or 0)
     report = normalize_module_report(raw, module=module)
     errors = validate_instance("discover-report", report)
     assert errors == [], f"{module} 产出归一后不符合契约:\n" + "\n".join(errors)

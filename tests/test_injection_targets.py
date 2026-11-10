@@ -19,30 +19,22 @@ from pathlib import Path
 
 import pytest
 
+from tests.smoke_env import resolve_sample
+
 ROOT = Path(__file__).resolve().parents[1]
 DERIVED = ROOT / "data" / "derived"
 IMAGE = ROOT / "<ROM_IMAGE>"
-BASE = 0x<BASE>
-
-
-def _sample_image() -> tuple[Path, int] | None:
-    import os
-
-    env = os.environ.get("FI_SMOKE_IMAGE")
-    candidates = ([Path(env)] if env else []) + sorted(ROOT.glob("*.bin"))
-    for c in candidates:
-        if c.is_file() and c.stat().st_size > 0:
-            base_env = os.environ.get("FI_SMOKE_BASE")
-            return c, int(base_env, 0) if base_env else BASE
-    return None
 
 
 @pytest.fixture(scope="module")
 def sample() -> tuple[Path, int]:
-    s = _sample_image()
-    if s is None:
-        pytest.skip("未找到样例镜像")
-    return s
+    """冒烟样例（镜像 + 基址）。
+
+    **必须设置 FI_SMOKE_BASE**：本文件的断言依赖地址语义（机器码↔地址换算、
+    注入点地址是否落在镜像内）。历史上这里内置了某颗芯片的基址常量，
+    既违反"实例值不进通用代码"，也会在其他镜像上产出错误结果。
+    """
+    return resolve_sample(require_base=True)
 
 
 @pytest.fixture(scope="module")

@@ -100,5 +100,15 @@ SCHEMA_REGISTRY: Final[dict[str, SchemaEntry]] = {
             filename="observation-classification.schema.json",
             title="ObservationClassification 观测五色分类（confidence 恒 observation）",
         ),
+        SchemaEntry(
+            name="bitflip-evidence",
+            filename="bitflip-evidence.schema.json",
+            title="BitflipEvidence 位翻转关键证据（含寄存器掩码防坑字段 + XOR 不变量）",
+        ),
+        SchemaEntry(
+            name="live-experiment",
+            filename="live-experiment.schema.json",
+            title="LiveExperiment 实机实验记录（Captured State，与 Simulated 严格分开）",
+        ),
     )
 }

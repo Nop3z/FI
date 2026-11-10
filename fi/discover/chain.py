@@ -417,6 +417,76 @@ def _walk_function(
     return info
 
 
+def _assess_coverage(
+    *,
+    image_size: int,
+    functions: dict[int, FunctionInfo],
+    depth: dict[int, int],
+    unresolved_end_count: int,
+    indirect_site_count: int,
+    dispatch_table_count: int,
+) -> dict:
+    """自评"这次递归下降覆盖够不够"（**防止小镜像上被误读为成功**）。
+
+    为什么要自评（实测教训）：在 168 字节的合成镜像上递归下降只得到 4 个函数、
+    30 条指令，摘要看起来"有结果"，但与真实固件（128KB / 217 函数 / 1 万条指令）
+    相比覆盖率极低——不加声明会让读者以为"分析已完成"。
+
+    判据（全部结构性、可解释，不猜测）：
+      - **指令覆盖率** = 可达指令字节 / 镜像字节；
+      - **未解析终点比例** = 因间接跳转/无法解码而停止的路径数 / 函数数；
+      - **分派表命中** = 是否解析出表（有表则覆盖率天然受表驱动）。
+    """
+    reachable_bytes = sum(
+        sum(i.size for i in fn.insns.values()) for fn in functions.values()
+    )
+    instr_coverage = (reachable_bytes / image_size) if image_size else 0.0
+    n_fns = max(1, len(functions))
+    unresolved_ratio = unresolved_end_count / n_fns
+
+    notes: list[str] = []
+    level = "adequate"
+    if len(functions) <= 8:
+        level = "insufficient_small_graph"
+        notes.append(
+            f"仅解析出 {len(functions)} 个函数——对真实固件而言明显偏少，"
+            "可能原因：入口偏移不对、镜像过小、或大部分代码经间接跳转进入")
+    if instr_coverage < 0.05 and image_size > 1024:
+        level = "insufficient_low_coverage"
+        notes.append(
+            f"指令覆盖率仅 {instr_coverage:.1%}（{reachable_bytes}/{image_size} B）——"
+            "远低于可用水平，结论不可当作'已分析完整固件'")
+    if unresolved_ratio > 0.5 and indirect_site_count > 0:
+        if level == "adequate":
+            level = "partial_indirect_blocked"
+        notes.append(
+            f"未解析终点比例 {unresolved_ratio:.1%}（{unresolved_end_count} 处）——"
+            "间接跳转是主要阻断原因，可达性不完整")
+    if not notes:
+        notes.append(
+            f"覆盖率自评正常：{len(functions)} 函数 / {reachable_bytes} 可达字节"
+            f"（{instr_coverage:.1%}）")
+    if dispatch_table_count:
+        notes.append(f"已解析 {dispatch_table_count} 张分派表，表驱动的间接目标已并入调用图")
+
+    return {
+        "assessment": level,
+        "instruction_coverage_ratio": round(instr_coverage, 4),
+        "reachable_insn_bytes": reachable_bytes,
+        "image_size_bytes": image_size,
+        "function_count": len(functions),
+        "unresolved_end_ratio": round(unresolved_ratio, 4),
+        "dispatch_table_count": dispatch_table_count,
+        "usable_for_attribution": level in ("adequate", "partial_indirect_blocked"),
+        "reason": "；".join(notes),
+        "discipline": (
+            "assessment=insufficient_* 表示本次递归下降覆盖不足，"
+            "**不得**把本报告的可达集当作完整调用图；"
+            "应先用 dispatch/attribute 通道或修正入口偏移"
+        ),
+    }
+
+
 def _enclosing(functions: dict[int, FunctionInfo], addr: int) -> int | None:
     for start, fn in functions.items():
         if start <= addr < fn.end:
@@ -1074,9 +1144,19 @@ def discover_chain(
         details = [functions[a].to_dict(image_lo=base, image_hi=image_hi)
                    for a in reachable_list]
 
+    coverage = _assess_coverage(
+        image_size=len(image),
+        functions=functions,
+        depth=depth,
+        unresolved_end_count=sum(len(f.unresolved_ends) for f in functions.values()),
+        indirect_site_count=sum(len(f.indirect) for f in functions.values()),
+        dispatch_table_count=len(dispatch_tables),
+    )
+
     return {
         "schema": "fi.discover.chain-report-v0",
         "tool": {"name": "fi.discover.chain", "version": "0.1.0"},
+        "coverage": coverage,
         "image": {
             "path": str(image_path), "sha256": sha256_hex(image),
             "size_bytes": len(image), "base_address": base,

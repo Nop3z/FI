@@ -1,4 +1,4 @@
-# FI 数据契约（面向 Web/Dashboard 团队）v0.3
+# FI 数据契约（面向 Web/Dashboard 团队）v0.5
 
 本目录是 FI 工具集向 Web server / Dashboard 团队交付的**数据契约权威来源**：
 字段定义、状态语义、证据分级、样例数据、变更说明。契约变更以本目录
@@ -18,6 +18,12 @@
 | `schemas/reverse-report.schema.json` | **ReverseReport**（v0.3 新增）：功能级逆向结论（目标功能/入口/调用链/时间估算/注入靶点） |
 | `schemas/discover-report.schema.json` | **DiscoverReport**（v0.3 新增）：芯片接入自动发现报告（regions/traps/targets，**confidence 只有 hypothesis\|unknown**） |
 | `schemas/tts-metrics.schema.json` | **TTSMetrics**（v0.3 新增，待定稿）：芯片接入耗时/吞吐指标，跨芯片对比与效率看板 |
+| `schemas/anomaly-report.schema.json` | **AnomalyReport**（v0.4）：异常数据综合分析报告（六块骨架 + 统计警示 + 证据链 + 可选指令级归因） |
+| `schemas/fault-effect.schema.json` | **FaultEffect**（v0.4 新增）：位翻转效果枚举（**confidence 恒 hypothesis**） |
+| `schemas/fault-explanation.schema.json` | **FaultExplanation**（v0.4 新增）：观测反解（**允许多解且必须全列**，confidence 恒 hypothesis） |
+| `schemas/observation-classification.schema.json` | **ObservationClassification**（v0.4 新增）：五色分类（**confidence 恒 observation**） |
+| `schemas/bitflip-evidence.schema.json` | **BitflipEvidence**（v0.5 新增）：位翻转关键证据（**寄存器掩码防坑字段 + XOR 不变量**；进 Web 契约） |
+| `schemas/live-experiment.schema.json` | **LiveExperiment**（v0.5 新增）：实机实验记录（**Captured State 与 Simulated 严格分开**） |
 | `status-semantics.md` | 状态标签语义（v0.2.0：异常机制链路已确认 fact，标签语义仍未确认） |
 | `param-mapping.md` | 参数窗口(ns) → 仿真故障事件映射契约 |
 | `trace-levels.md` | **轨迹分级契约**（v0.3 新增）：`--trace-level=off\|binary\|sampled\|full` 语义 |

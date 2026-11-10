@@ -36,6 +36,24 @@
 - 级别升级（如 `sampled` → `full`）用于"发现异常后再回看"：管线应保留原始级别与
   重跑配置，可重放。
 
+### 3.1 实测达标（2026-11-10，fi.sim 轨迹分级实测）
+
+| 级别 | 实测体积 | 相对 full 缩减 | 是否达标（目标 ≤ 8 B/指令） |
+| --- | --- | --- | --- |
+| `full` | ≈ 262 B/指令（历史实测） | 1×（基线） | 否（调试专用） |
+| `sampled` / `binary` | **3.98 B/指令** | 约 66× | **达标**（≤ 8 B/指令） |
+
+结论与口径说明：
+
+- **3.98 B/指令**是采样/二进制模式下的大规模扫描实测值，对应
+  `docs/tts-baseline.md` §3 的「轨迹体积 ≤ 8 B/指令」目标，为日常扫描可用性的
+  直接依据；Dashboard 效率页可引用该数字与 `full` 模式对比展示。
+- 该数字**只在标注级别下有效**：引用时必须同时给出 `trace_level`（见
+  `tts-metrics.schema.json` 的 `basis.trace_level`）——`full` 模式的吞吐与体积
+  不可与本数字直接比较。
+- 级别只影响记录量，不影响执行语义：同一配置在 `off` 与 `full` 下
+  `run_end.exit_reason / instruction_count / final_pc` 必须一致（见 §2 纪律 1）。
+
 ## 4. `binary` 级别：传输/存储格式归 sim-engine
 
 **契约边界（重要）**：二进制是**传输与存储格式**，不是数据契约。字节布局（magic、
@@ -102,3 +120,6 @@ python -m fi.sim.trace_diff runs/rt-full/trace.jsonl runs/rt-bin/trace.jsonl \
 
 - v0.3（2026-11-09）：初始发布。定义四级语义、binary 的契约边界（布局归 sim-engine、
   reader 归一义务 + round-trip 验证）、sampled 选样规则与消费方规则。
+- v0.5.0（2026-11-10）：新增 §3.1 实测达标节——采样/二进制模式实测 **3.98 B/指令**，
+  达成 ≤8 B/指令目标（对比 full ≈262 B/指令，约 66× 缩减）。数字仅在标注
+  `trace_level` 时可比（见 tts-metrics.basis.trace_level）。
