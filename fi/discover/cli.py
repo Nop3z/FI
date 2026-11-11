@@ -28,7 +28,7 @@ DISCOVER_GROUP = "discover"
 
 
 def _parse_int(text: str) -> int:
-    """接受 "0x<BASE>" / "<BASE_DEC>" 两种写法。"""
+    """接受 "0x<BASE>" / "100000000" 两种写法。"""
     return int(text, 0)
 
 

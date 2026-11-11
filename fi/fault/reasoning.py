@@ -43,6 +43,7 @@ def _parse_imm(tok: str) -> int | None:
 
 
 _RE_ADDI = re.compile(r"^(?:c\.addi|addi)\s+(\w+),\s*(\w+),\s*(-?(?:0x[0-9a-fA-F]+|\d+))$")
+_RE_ADDI1 = re.compile(r"^c\.addi\s+(\w+),\s*(-?(?:0x[0-9a-fA-F]+|\d+))$")
 _RE_LI = re.compile(r"^(?:c\.li|li)\s+(\w+),\s*(-?(?:0x[0-9a-fA-F]+|\d+))$")
 _RE_LUI = re.compile(r"^(?:c\.lui|lui)\s+(\w+),\s*(-?(?:0x[0-9a-fA-F]+|\d+))$")
 _RE_ADD = re.compile(r"^(?:c\.add|add)\s+(\w+),\s*(\w+),\s*(\w+)$")
@@ -51,6 +52,13 @@ _RE_AND = re.compile(r"^(?:c\.and|and)\s+(\w+),\s*(\w+),\s*(\w+)$")
 _RE_OR = re.compile(r"^(?:c\.or|or)\s+(\w+),\s*(\w+),\s*(\w+)$")
 _RE_XOR = re.compile(r"^(?:c\.xor|xor)\s+(\w+),\s*(\w+),\s*(\w+)$")
 _RE_SLLI = re.compile(r"^(?:c\.slli|slli)\s+(\w+),\s*(\w+),\s*(?:0x)?([0-9a-fA-F]+|\d+)$")
+# 压缩移位立即数形态：c.srli / c.srai 只有 rd 一个寄存器操作数
+# （实测教训 2026-11-10：门检查函数全是 2 字节指令，缺这些正则会让反解整段 unsupported）
+_RE_SRLI_C = re.compile(r"^(?:c\.srli|srli)\s+(\w+),\s*(?:0x)?([0-9a-fA-F]+|\d+)$")
+_RE_SRAI_C = re.compile(r"^(?:c\.srai|srai)\s+(\w+),\s*(?:0x)?([0-9a-fA-F]+|\d+)$")
+# 压缩按位与立即数：c.andi rd, imm6（有符号 6 位）
+_RE_ANDI_C = re.compile(r"^c\.andi\s+(\w+),\s*(-?(?:0x[0-9a-fA-F]+|\d+))$")
+_RE_ANDI = re.compile(r"^andi\s+(\w+),\s*(\w+),\s*(-?(?:0x[0-9a-fA-F]+|\d+))$")
 
 
 def _eval_insn(text: str, regs: dict[str, int]) -> tuple[dict[str, int], str]:
@@ -73,6 +81,68 @@ def _eval_insn(text: str, regs: dict[str, int]) -> tuple[dict[str, int], str]:
         val = (regs[rs1] + imm) & 0xFFFFFFFF
         if rd != "zero":
             out[rd] = val
+        return out, "ok"
+    # c.addi rd, imm（单寄存器形态）
+    m = _RE_ADDI1.match(text)
+    if m:
+        rd, imm_s = m.group(1), m.group(2)
+        imm = _parse_imm(imm_s)
+        if imm is None or rd not in regs:
+            return out, "unsupported"
+        imm &= 0x3F
+        if imm >= 32:
+            imm -= 64
+        if rd != "zero":
+            out[rd] = (regs[rd] + imm) & 0xFFFFFFFF
+        return out, "ok"
+    # c.andi rd, imm6（有符号 6 位立即数）
+    m = _RE_ANDI_C.match(text)
+    if m:
+        rd, imm_s = m.group(1), m.group(2)
+        imm = _parse_imm(imm_s)
+        if imm is None or rd not in regs:
+            return out, "unsupported"
+        imm &= 0x3F
+        if imm >= 32:
+            imm -= 64
+        if rd != "zero":
+            out[rd] = regs[rd] & (imm & 0xFFFFFFFF)
+        return out, "ok"
+    # andi rd, rs1, imm12
+    m = _RE_ANDI.match(text)
+    if m:
+        rd, rs1, imm_s = m.group(1), m.group(2), m.group(3)
+        imm = _parse_imm(imm_s)
+        if imm is None or rs1 not in regs:
+            return out, "unsupported"
+        imm &= 0xFFF
+        if imm >= 2048:
+            imm -= 4096
+        if rd != "zero":
+            out[rd] = regs[rs1] & (imm & 0xFFFFFFFF)
+        return out, "ok"
+    # c.srli / srli rd, shamt（逻辑右移）
+    m = _RE_SRLI_C.match(text)
+    if m:
+        rd, sh_s = m.group(1), m.group(2)
+        sh = _parse_imm(sh_s)
+        if sh is None or rd not in regs:
+            return out, "unsupported"
+        if rd != "zero":
+            out[rd] = (regs[rd] >> sh) & 0xFFFFFFFF
+        return out, "ok"
+    # c.srai / srai rd, shamt（算术右移，按 32 位有符号）
+    m = _RE_SRAI_C.match(text)
+    if m:
+        rd, sh_s = m.group(1), m.group(2)
+        sh = _parse_imm(sh_s)
+        if sh is None or rd not in regs:
+            return out, "unsupported"
+        v = regs[rd] & 0xFFFFFFFF
+        if v & 0x80000000:
+            v -= 0x100000000
+        if rd != "zero":
+            out[rd] = (v >> sh) & 0xFFFFFFFF
         return out, "ok"
     m = _RE_LI.match(text)
     if m:

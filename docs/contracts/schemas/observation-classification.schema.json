@@ -126,7 +126,7 @@
     "experiment_ref": {
       "$ref": "common.defs.json#/$defs/string_or_unknown",
       "description": "关联实验/记录 ID（如 CampaignRecord.campaign_id）。",
-      "examples": ["camp-<DATE>-0042", "unknown"]
+      "examples": ["camp-19991231-0042", "unknown"]
     },
 
     "target_feature_ref": {

@@ -1,8 +1,5 @@
 # FI Dashboard 前端更新报告
 
-> 本文档为 Web/Dashboard 前端团队的交付报告，经脱敏后随工具集仓库发布。
-> 具体实验数据集的规模指纹与本机路径已替换为占位符；接口契约与字段配置说明保持原文。
-
 - **发给**：数据契约/派生数据技术团队
 - **来自**：Web/Dashboard 前端团队
 - **日期**：2026-11-11（基于当日上线的桌面版式改造 + AI 可配置化批次）
@@ -56,35 +53,38 @@ python app.py            # 端口 8765；或双击 start.cmd（推荐，可常�
 | 区域 | 内容 |
 |---|---|
 | 顶栏 | 标题 + 语义标注（unconfirmed-v0.1）+ ns 假设标注 + 手动刷新按钮 |
-| 左栏 | state|count 汇总表（状态原始字面量透传）；下方实时明细日志流（最新置顶，内部滚动） |
-| 右栏 | 三张 delay 分布图，悬停任意柱显示 `区间 · 计数/总数 · 百分比` |
-| 面板下方 | 「AI 活动」「契约与单位假设」两个折叠区（契约版本动态解析） |
+| 左栏 | state|count 汇总表（FL/HANG/SUCCESS/UNEXPECTED/Fake_Success 原始字面量）；下方实时明细日志流（最新置顶，内部滚动） |
+| 右栏 | SUCCESS / HANG / UNEXPECTED 三张 delay 分布图，悬停任意柱显示 `区间 · 计数/总数 · 百分比` |
+| 面板下方 | 「AI 活动」「契约与单位假设」两个折叠区（契约版本动态解析，当前 0.5.0） |
 | 底部状态行 | 已记录总数 / 当前窗口 / 更新时间 / live 绿点 |
 
 ### URL 参数（AI 与自动化可以直接拼 URL 配置）
 | 参数 | 取值 | 作用 | 示例 |
 |---|---|---|---|
 | `demo=1` | — | 演示模式 | `/?demo=1` |
-| `state` | 状态字面量之一 | 预置筛选（只看该状态） | `/?state=<STATE>` |
+| `dataset` | 见 `/api/datasets` 枚举 | **渲染哪个数据集**（后端按前缀定位 CSV/state-counts/histograms，无需改码重启） | `/?dataset=<prefix>` |
+| `state` | 五状态字面量之一 | 预置筛选（只看该状态） | `/?state=HANG` |
 | `limit` | 1–500 | 明细表窗口条数（默认 30） | `/?limit=50` |
 | `bin` | 1–100 | 直方图区间宽 raw（默认 5） | `/?bin=10` |
 | `poll_records` / `poll_activity` / `poll_histogram` | ≥500 | 轮询间隔 ms（默认 2000/3000/30000） | `/?poll_records=5000` |
 | `color_success` / `color_hang` / `color_unexpected` | `#RRGGBB`（`#` 转义为 `%23`） | 覆盖柱色 | `/?color_hang=%23ff0000` |
 
-组合示例：`http://127.0.0.1:8765/?state=<STATE>&limit=100&bin=10`
+组合示例：`http://127.0.0.1:8765/?state=UNEXPECTED&limit=100&bin=10`
 
 ### 健康检查（排障用，务必带 `--noproxy`）
 ```bash
 curl -s --noproxy "*" http://127.0.0.1:8765/api/health            # {"status":"ok"}
-curl -s --noproxy "*" http://127.0.0.1:8765/api/summary           # 数据集规模指纹已脱敏
-curl -s --noproxy "*" "http://127.0.0.1:8765/api/records?limit=1"
-curl -s --noproxy "*" http://127.0.0.1:8765/api/contracts         # changelog 版本 / 常量版本
+curl -s --noproxy "*" http://127.0.0.1:8765/api/datasets          # 枚举可用数据集 + active 前缀
+curl -s --noproxy "*" http://127.0.0.1:8765/api/summary           # total_rows=123456, FL=123450
+curl -s --noproxy "*" "http://127.0.0.1:8765/api/records?limit=1" # 首行 row_index=123456
+curl -s --noproxy "*" http://127.0.0.1:8765/api/contracts         # changelog 0.5.0 / 常量 0.2
 ```
+数据集切换：三个数据接口（summary/records/histogram）均接受 `?dataset=<前缀>`；不合法 → 400 `invalid_dataset`，文件缺失 → 404 `dataset_missing`（均带 `missing_reason`），成功响应顶层带 `dataset` 字段。也可用环境变量 `FI_DATASET_PREFIX` 设默认前缀。
 
 ### 技术团队需要知道的边界（都没变）
 1. **只读**：页面无任何注入/执行/控制按钮，仅刷新与 URL 筛选
-2. **展示纪律照旧**：状态标签原始字面量透传、ns 必带单位假设标注、证据等级不升格、缺数据写「未知」、演示必带横幅
-3. **接口未动**：`/api/*` 七个接口签名与返回结构无任何变化，技术团队交付新契约后看板照常经 `sync.py` 适配
+2. **展示纪律照旧**：状态标签原始字面量透传、ns 必带 A1 假设标注、证据等级不升格、缺数据写「未知」、演示必带横幅
+3. **接口未动**：`/api/*` 七个接口签名与返回结构无任何变化，你们交付新契约后看板照常经 `sync.py` 适配
 4. **新结果类产物**（计数/直方图/分析结论）出现时，通知前端评估是否增加展示即可
 
 ### 已知注意事项
@@ -94,4 +94,4 @@ curl -s --noproxy "*" http://127.0.0.1:8765/api/contracts         # changelog �
 
 ---
 
-*本报告对应 `dashboard/static/index.html` 当前版本（MulanPSL-2.0 声明与 ViewViewView 复用清单保留完整）。*
+*本报告对应 `dashboard/static/index.html` 当前版本（MulanPSL-2.0 声明与 ViewViewView 复用清单保留完整）。变更留痕：`.workbuddy-ai/memory/2026-11-11.md`。*

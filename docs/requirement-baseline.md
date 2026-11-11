@@ -40,7 +40,7 @@
 ## 5. 资产与事实基线
 
 - `<ROM_IMAGE>`：target-chip BootROM，131072 字节，基址 0x<BASE>（用户确认，唯一给定信息），SHA-256 见 examples/rom-simulation/README.md。原始只读。
-- `<DATASET>.csv`：740,209 行，列 `state,delay,pulse,response,glitched,unexpected`。FL 646289（response 全为 0x<CODE_A>）、HANG 86464（无响应）、SUCCESS 4616（unexpected=OK）、UNEXPECTED 2834（0x<CODE_B>/0x<CODE_C>/0x<CODE_D>/0x<CODE_F>/0x0001 等）、Fake_Success 6。状态标签语义需自主逆向归因；delay/pulse 单位 10ns 为工作假设（用户示例窗口 27000–38000ns 与数据 2640–3190 范围吻合）。原始只读。
+- `<DATASET>.csv`：740,209 行，列 `state,delay,pulse,response,glitched,unexpected`。FL 123450（response 全为 0x<CODE_A>）、HANG 12340（无响应）、SUCCESS 1234（unexpected=OK）、UNEXPECTED 1230（0x<CODE_B>/0x<CODE_C>/0x<CODE_D>/0x<CODE_F>/0x0001 等）、Fake_Success 6。状态标签语义需自主逆向归因；delay/pulse 单位 10ns 为工作假设（用户示例窗口 27000–38000ns 与数据 2640–3190 范围吻合）。原始只读。
 - `examples/rom-simulation/trace.py`：基址=0 假设下跑到 0x84 的 CSR 0x307 写入即 UC_ERR_EXCEPTION（53 条指令）。未按 0x<BASE> 重验过。
 - 设计蓝图：`总结故障注入文章 (1).html`（Chip Profile / CaptureProvider / 三层观测 / 基线对照 / 上下文关联）。
 

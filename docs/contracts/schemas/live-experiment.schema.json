@@ -22,7 +22,7 @@
     "experiment_id": {
       "$ref": "common.defs.json#/$defs/id",
       "description": "本次实机实验唯一 ID。",
-      "examples": ["live-20261110-0001"]
+      "examples": ["live-19991231-0001"]
     },
 
     "state_origin": {

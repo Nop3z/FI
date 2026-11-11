@@ -78,7 +78,7 @@
           "type": "integer",
           "minimum": 0,
           "description": "加载基址（uint）。",
-          "examples": [<BASE_DEC>]
+          "examples": [100000000]
         }
       },
       "examples": [
@@ -86,7 +86,7 @@
           "path": "firmware.bin",
           "sha256": "71229c3fd4b0ca0e39e676c65e64b7a14f91f51c42dad9c86db3d0cf67c1c52f",
           "size_bytes": 131072,
-          "base_address": <BASE_DEC>
+          "base_address": 100000000
         }
       ]
     },

@@ -391,7 +391,7 @@ Simulated State 严格分开）；② chip-profile-ds 发现并修正一个会�
 - `success_wilson95`→`target_wilson95` 等 metrics 键名更替：metrics 为契约
   自由对象，键名属分析内部约定。
 - clusters `significant_points` 结构调整：同上，findings/candidates 自由对象。
-- 新增数据文件 `data/derived/sample-run-<DATE>.json`（含 meta.run_config）：
+- 新增数据文件 `data/derived/sample-run-19991231.json`（含 meta.run_config）：
   分析样例运行产物，属 analysis 内部文件类型，非契约交付类型。
 - error-codes 相关键更名：属 chip-profile 的 target-chip.yaml 内部（profile-internal），
   已由 status-semantics.md v0.1.1 同步转写（见上）。

@@ -366,22 +366,53 @@ def _section_command_surface(ds: Dataset, cfg: AnomalyReportConfig,
     bg = labels[0] if labels else None
     out: dict[str, Any] = {"available": True, "n_rows": n, "background_state": bg}
 
-    # 主 pulse 推导
-    pulse_counts: dict[int, int] = {}
+    # 主 pulse 推导 / 选择策略
+    #
+    # **实机数据的教训（2026-11-10）**：历史 CSV 是"单一 pulse + 高密度 delay"，
+    # 因此"取行数最多的 pulse 作为主扫描"是合理的。但实机数据常常是
+    # "多 pulse 混合 + 每点极少采样"（如 11 档 pulse、159 个 delay 点、每点 1.17 次），
+    # 此时按行数最多选主 pulse 会把 90%+ 的数据丢出分析，只剩十几个点。
+    #
+    # 因此改为三态策略：
+    #   - config 显式指定 → 采用；
+    #   - 单一 pulse 占绝大多数（≥90%）→ 推导为该 pulse（历史 CSV 情形）；
+    #   - **pulse 分散（无主导值）→ 不选主 pulse，改用全量数据做参数轴分析**，
+    #     并在输出中标注 ``multi_pulse_mode``（实机情形）。
+    pulse_counts = {}
     for r in rows:
         if r["pulse_raw"] is not None:
             pulse_counts[r["pulse_raw"]] = pulse_counts.get(r["pulse_raw"], 0) + 1
+    n_with_pulse = sum(pulse_counts.values())
     if cfg.main_pulse is not None:
         main_pulse = cfg.main_pulse
         derived = False
+        mode = "explicit"
     elif pulse_counts:
-        main_pulse = max(pulse_counts, key=lambda k: pulse_counts[k])
-        derived = True
+        top_pulse, top_n = max(pulse_counts.items(), key=lambda kv: kv[1])
+        share = top_n / n_with_pulse if n_with_pulse else 0.0
+        if share >= 0.90:
+            main_pulse = top_pulse
+            derived = True
+            mode = "derived_dominant_pulse"
+        else:
+            main_pulse = None      # 多 pulse 混合：不筛选，用全量
+            derived = False
+            mode = "multi_pulse_all_rows"
     else:
         main_pulse = None
         derived = False
+        mode = "no_pulse_axis"
     out["main_pulse"] = main_pulse
     out["main_pulse_derived"] = derived
+    out["pulse_selection_mode"] = mode
+    out["pulse_counts"] = {str(k): v for k, v in sorted(pulse_counts.items())}
+    if mode == "multi_pulse_all_rows":
+        out["pulse_selection_note"] = (
+            f"pulse 有 {len(pulse_counts)} 个取值且无主导值（最多者占 "
+            f"{max(pulse_counts.values()) / n_with_pulse:.1%} < 90%）→ "
+            "**不做 pulse 筛选，参数轴分析使用全部行**；"
+            "pulse 维本身的效应请见 sections.pulse_axis"
+        )
 
     # 码表
     tax = code_taxonomy(rows, background_state=bg)
@@ -405,11 +436,15 @@ def _section_command_surface(ds: Dataset, cfg: AnomalyReportConfig,
             "reason": "config 未提供 code_phase_map（码↔功能阶段须由 ROM 侧逆向提供）",
         }
 
-    # 条件构成 + 去趋势 delay 画像（仅主扫描子集）
-    main_rows = [r for r in rows if r["pulse_raw"] == main_pulse]
+    # 参数轴分析：main_pulse 有值时筛主扫描；多 pulse 混合时用全量
+    if main_pulse is not None:
+        main_rows = [r for r in rows if r["pulse_raw"] == main_pulse]
+    else:
+        main_rows = list(rows)
     if main_rows:
         baseline = list(cfg.baseline_states) or ([bg] if bg else [])
         out["baseline_states_used"] = baseline
+        out["n_rows_in_axis_analysis"] = len(main_rows)
         out["conditional_composition_by_delay"] = conditional_composition(
             main_rows, axis="delay_raw", baseline_states=baseline)
         axis = [r["delay_raw"] for r in main_rows]
@@ -446,7 +481,106 @@ def _section_command_surface(ds: Dataset, cfg: AnomalyReportConfig,
         out["_sig_full"] = sig  # 供第 4 节功效使用（输出前剥离）
         out["_delays"] = delays
         out["_by_point"] = by_point
+
+    # pulse 维分析（实机数据的关键维度；历史 CSV 因 pulse 单一而天然退化）
+    out["pulse_axis"] = _pulse_axis_analysis(rows, labels)
     return out
+
+
+#: pulse 维分析的可用性阈值：不同取值数 ≥ 该值才做分析
+PULSE_AXIS_MIN_VALUES = 4
+#: 弱信号阈值：取值数在 [PULSE_AXIS_MIN_VALUES, PULSE_AXIS_WEAK_VALUES) 之间时分析力有限
+PULSE_AXIS_WEAK_VALUES = 6
+
+
+def _pulse_axis_analysis(rows: Sequence[dict], labels: Sequence[str]) -> dict:
+    """pulse 维分析：每个 pulse 档的标签构成 + 阈值检测。
+
+    **为什么单独做**：在单一 pulse 的历史数据上这一维退化为常数（无信息），
+    但在实机数据上它常常是**唯一有信号的维度**（例如 pulse 超过某阈值后
+    100% 无响应）。若把它混在 delay 分析里，效应会被完全稀释。
+
+    **可用性阈值**：不同 pulse 取值 < ``PULSE_AXIS_MIN_VALUES``（默认 4）时
+    不分析（``available=False``）——两个取值只能比较一次，无法建立"趋势"
+    或"阈值"结论，强行分析会产生误导性输出（历史数据 {2, 6} 即此情形）。
+    取值数较少（4–5 个）时仍分析但标 ``weak_signal=True``。
+    """
+    pulse_vals = sorted({r["pulse_raw"] for r in rows if r["pulse_raw"] is not None})
+    if len(pulse_vals) < PULSE_AXIS_MIN_VALUES:
+        return {
+            "available": False,
+            "reason": (f"pulse 仅有 {len(pulse_vals)} 个取值"
+                       f"（< {PULSE_AXIS_MIN_VALUES}），维度信息不足："
+                       "无法建立趋势或阈值结论"),
+            "pulse_values": pulse_vals,
+            "weak_signal": None,
+        }
+    weak_signal = len(pulse_vals) < PULSE_AXIS_WEAK_VALUES
+
+    by_pulse: dict = {}
+    for p in pulse_vals:
+        sub = [r for r in rows if r["pulse_raw"] == p]
+        n = len(sub)
+        counts: dict[str, int] = {}
+        for r in sub:
+            counts[r["state"]] = counts.get(r["state"], 0) + 1
+        by_pulse[p] = {
+            "n": n,
+            "label_counts": {k: counts[k] for k in sorted(counts, key=lambda x: -counts[x])},
+            "label_rates": {k: round(v / n, 6) for k, v in
+                            sorted(counts.items(), key=lambda kv: -kv[1])},
+        }
+
+    # 阈值检测：对每个标签，找出"率从低到高突变"的相邻 pulse 档
+    thresholds = {}
+    for lab in labels:
+        series = [(p, by_pulse[p]["label_counts"].get(lab, 0) / by_pulse[p]["n"])
+                  for p in pulse_vals if by_pulse[p]["n"] > 0]
+        jumps = []
+        for i in range(1, len(series)):
+            (p0, r0), (p1, r1) = series[i - 1], series[i]
+            if abs(r1 - r0) >= 0.5:      # 率突变 ≥50pp 视为阈值候选
+                jumps.append({
+                    "between_pulse": [p0, p1],
+                    "rate_before": round(r0, 4),
+                    "rate_after": round(r1, 4),
+                    "delta_pp": round((r1 - r0) * 100, 2),
+                })
+        if jumps:
+            thresholds[lab] = jumps
+
+    # 由数据推导"稳定类"（低档与高档率接近 0 或 1 的标签）与"敏感类"
+    saturated = []
+    for lab in labels:
+        for p in pulse_vals:
+            c = by_pulse[p]["label_counts"].get(lab, 0)
+            n = by_pulse[p]["n"]
+            if n >= 5 and c == n:
+                saturated.append({
+                    "label": lab, "pulse": p, "n": n,
+                    "note": f"pulse={p} 时该标签占 100%（{n}/{n}），已达饱和："
+                            "该档对此标签无信息量，后续实验不必重复",
+                })
+    return {
+        "available": True,
+        "n_pulse_values": len(pulse_vals),
+        "pulse_values": pulse_vals,
+        "weak_signal": weak_signal,
+        "weak_signal_note": (
+            f"pulse 仅 {len(pulse_vals)} 个取值，虽可分析但趋势/阈值结论的"
+            "稳健性有限（建议 ≥6 个取值，且阈值附近加密）"
+            if weak_signal else None
+        ),
+        "by_pulse": {str(k): v for k, v in by_pulse.items()},
+        "rate_jump_thresholds": thresholds,
+        "saturated_cells": saturated,
+        "interpretation": (
+            "rate_jump_thresholds 给出率突变 ≥50pp 的相邻 pulse 档——这是"
+            "'阈值效应'的直接证据（如毛刺宽度超过某值后必然崩溃）；"
+            "saturated_cells 标出已达 0% 或 100% 的档位，这些档位对区分无贡献，"
+            "下一轮采样应集中在**未饱和**区间"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

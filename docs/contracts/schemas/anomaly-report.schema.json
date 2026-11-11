@@ -84,12 +84,12 @@
           "type": "integer",
           "minimum": 0,
           "description": "实际参与分析的结构化记录数。",
-          "examples": [740209]
+          "examples": [123456]
         },
         "n_rows_raw": {
           "$ref": "common.defs.json#/$defs/uint_or_unknown",
           "description": "数据源原始行数（含被跳过行）。",
-          "examples": [740209, "unknown"]
+          "examples": [123456, "unknown"]
         },
         "checksum": {
           "$ref": "common.defs.json#/$defs/string_or_unknown",
@@ -111,8 +111,8 @@
         {
           "path": "data/derived/<DATASET>.typed.jsonl",
           "format": "typed_jsonl",
-          "n_rows": 740209,
-          "n_rows_raw": 740209,
+          "n_rows": 123456,
+          "n_rows_raw": 123456,
           "checksum": "unknown",
           "config_ref": "data/derived/anomaly-report.config.json",
           "has_byte_stream": false
@@ -146,9 +146,9 @@
           "quality_and_stationarity": {
             "gate_passed": true,
             "gate_failures": ["数据非平稳（见 nonstationary_labels）"],
-            "n_rows": 740209,
+            "n_rows": 123456,
             "labels": ["FL", "HANG", "SUCCESS"],
-            "label_counts": { "FL": 646289, "HANG": 86464, "SUCCESS": 4616 },
+            "label_counts": { "FL": 123450, "HANG": 12340, "SUCCESS": 1234 },
             "nonstationarity_detected": true,
             "nonstationary_labels": [],
             "stationarity_verdict": "数据非平稳（示例）",
@@ -333,7 +333,7 @@
           "type": "integer",
           "minimum": 0,
           "description": "参与分析的记录数。",
-          "examples": [740209]
+          "examples": [123456]
         },
         "skipped_rows": {
           "$ref": "common.defs.json#/$defs/uint_or_unknown",
@@ -350,7 +350,7 @@
           "type": "object",
           "description": "标签频次（键为原始标签字面量）。",
           "additionalProperties": { "type": "integer", "minimum": 0 },
-          "examples": [{ "FL": 646289, "HANG": 86464 }]
+          "examples": [{ "FL": 123450, "HANG": 12340 }]
         },
         "nonstationarity_detected": {
           "type": "boolean",
@@ -415,10 +415,10 @@
         {
           "gate_passed": true,
           "gate_failures": ["数据非平稳（见 nonstationary_labels）"],
-          "n_rows": 740209,
+          "n_rows": 123456,
           "skipped_rows": 0,
           "labels": ["FL", "HANG", "SUCCESS"],
-          "label_counts": { "FL": 646289, "HANG": 86464, "SUCCESS": 4616 },
+          "label_counts": { "FL": 123450, "HANG": 12340, "SUCCESS": 1234 },
           "nonstationarity_detected": true,
           "nonstationary_labels": [],
           "stationarity_threshold": 10.0,
@@ -534,7 +534,7 @@
             [
               {
                 "code": "0x<CODE_A>",
-                "count": 646289,
+                "count": 123450,
                 "rate": 0.8731,
                 "wilson95": "unknown",
                 "confidence": "observation",
@@ -552,7 +552,7 @@
               {
                 "family": "A_length_misalign",
                 "codes": ["0x<CODE_A>"],
-                "count": 646289,
+                "count": 123450,
                 "rate": 0.8731,
                 "confidence": "hypothesis",
                 "evidence_refs": ["ev-003"]
@@ -572,7 +572,7 @@
                 "handler_addr": 553648542,
                 "handler_note": "andi + c.beqz 邻近装载点",
                 "observed_in_data": true,
-                "observed_count": 646289,
+                "observed_count": 123450,
                 "phase_confidence": "hypothesis",
                 "code_confidence": "observation",
                 "confidence": "hypothesis",
@@ -678,7 +678,7 @@
           "type": "integer",
           "minimum": 0,
           "description": "出现行数。",
-          "examples": [646289]
+          "examples": [123450]
         },
         "rate": {
           "$ref": "common.defs.json#/$defs/number_or_unknown",
@@ -700,7 +700,7 @@
       "examples": [
         {
           "code": "0x<CODE_A>",
-          "count": 646289,
+          "count": 123450,
           "rate": 0.8731,
           "wilson95": "unknown",
           "confidence": "observation",
@@ -731,7 +731,7 @@
           "type": "integer",
           "minimum": 0,
           "description": "该族总行数。",
-          "examples": [646289]
+          "examples": [123450]
         },
         "rate": {
           "$ref": "common.defs.json#/$defs/number_or_unknown",
@@ -749,7 +749,7 @@
         {
           "family": "A_length_misalign",
           "codes": ["0x<CODE_A>"],
-          "count": 646289,
+          "count": 123450,
           "rate": 0.8731,
           "confidence": "hypothesis",
           "evidence_refs": ["ev-003"]
@@ -792,7 +792,7 @@
         "observed_count": {
           "$ref": "common.defs.json#/$defs/uint_or_unknown",
           "description": "该码出现行数。",
-          "examples": [646289, 0]
+          "examples": [123450, 0]
         },
         "phase_confidence": {
           "$ref": "common.defs.json#/$defs/evidence_level",
@@ -818,7 +818,7 @@
           "handler_addr": 553648542,
           "handler_note": "andi + c.beqz 邻近装载点",
           "observed_in_data": true,
-          "observed_count": 646289,
+          "observed_count": 123450,
           "phase_confidence": "hypothesis",
           "code_confidence": "observation",
           "confidence": "hypothesis",
@@ -1852,7 +1852,7 @@
         "affected_rows": {
           "$ref": "common.defs.json#/$defs/uint_or_unknown",
           "description": "受影响数据行数；不适用写 unknown。",
-          "examples": [2834, "unknown"]
+          "examples": [1230, "unknown"]
         },
         "confidence": {
           "type": "string",

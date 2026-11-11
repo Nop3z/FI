@@ -229,12 +229,12 @@ def test_schema_validate_jsonl_sim_trace(tmp_path: Path) -> None:
     run_id = "run-cli-1"
     lines = [
         {"type": "run_meta", "run_id": run_id,
-         "image": {"path": "<ROM_IMAGE>", "sha256": "a" * 64, "base_address": <BASE_DEC>},
+         "image": {"path": "<ROM_IMAGE>", "sha256": "a" * 64, "base_address": 100000000},
          "engine": {"name": "stub"}, "evidence_level": "observation"},
-        {"type": "trace", "run_id": run_id, "seq": 0, "pc": <BASE_DEC>,
+        {"type": "trace", "run_id": run_id, "seq": 0, "pc": 100000000,
          "instruction_raw": "73100730", "evidence_level": "observation"},
         {"type": "run_end", "run_id": run_id, "exit_reason": "normal",
-         "final_pc": <BASE_DEC>, "instruction_count": 1, "evidence_level": "observation"},
+         "final_pc": 100000000, "instruction_count": 1, "evidence_level": "observation"},
     ]
     f = tmp_path / "trace.jsonl"
     f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")

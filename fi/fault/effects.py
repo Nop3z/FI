@@ -47,8 +47,16 @@ _X_ABI = [
 
 
 def _disasm_one(code: bytes, addr: int, xlen: int = 32) -> str | None:
-    md = capstone.Cs(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCV32
-                     if xlen == 32 else capstone.CS_MODE_RISCV64)
+    """反汇编一条指令（**必须启用 RVC**：2 字节压缩指令是 RISC-V 固件的常态形态）。
+
+    实测教训（2026-11-10）：早期版本只设 `CS_MODE_RISCV32`、未设 `CS_MODE_RISCVC`，
+    导致所有 2 字节压缩指令（`c.bnez`/`c.srli`/`c.andi`/`c.jr` 等）**完全无法解码**，
+    `orig_text` 为 None、全部变体也都解不出 → 位翻转推演对压缩指令整段失效。
+    而门检查这类短小关键函数**几乎全是 2 字节指令**，所以这是致命缺陷。
+    """
+    md = capstone.Cs(capstone.CS_ARCH_RISCV,
+                     (capstone.CS_MODE_RISCV32 if xlen == 32
+                      else capstone.CS_MODE_RISCV64) | capstone.CS_MODE_RISCVC)
     md.detail = False
     try:
         insn = next(md.disasm(code, addr))

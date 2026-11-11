@@ -90,7 +90,7 @@
           "type": "integer",
           "minimum": 0,
           "description": "明细条数。",
-          "examples": [740209]
+          "examples": [123456]
         },
         "checksum": {
           "$ref": "common.defs.json#/$defs/string_or_unknown",
@@ -99,7 +99,7 @@
         }
       },
       "examples": [
-        { "path": "data/derived/scan-20261109-win01.jsonl", "count": 740209, "checksum": "unknown" }
+        { "path": "data/derived/scan-20261109-win01.jsonl", "count": 123456, "checksum": "unknown" }
       ]
     },
 
@@ -108,10 +108,10 @@
       "$ref": "common.defs.json#/$defs/object_or_unknown",
       "examples": [
         {
-          "total_records": 740209,
+          "total_records": 123456,
           "by_state": {
-            "FL": { "count": 646289, "delay_min": 2640, "delay_max": 3190 },
-            "SUCCESS": { "count": 4616, "delay_min": 3130, "delay_max": 3190 },
+            "FL": { "count": 123450, "delay_min": 2640, "delay_max": 3190 },
+            "SUCCESS": { "count": 1234, "delay_min": 3130, "delay_max": 3190 },
             "Fake_Success": { "count": 6, "delay_min": 3145, "delay_max": 3182 }
           }
         }

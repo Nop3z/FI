@@ -24,7 +24,7 @@ FORBIDDEN_STRINGS: frozenset[str] = frozenset(
         "0x<CODE_C>",
         "0x<CODE_D>",
         "0x<CODE_F>",
-        "0xc140",
+        "0x<CODE_F>",
         "0x0001",
         "FL",
         "HANG",
@@ -36,7 +36,7 @@ FORBIDDEN_STRINGS: frozenset[str] = frozenset(
 
 FORBIDDEN_INTS: frozenset[int] = frozenset(
     {
-        <BASE_DEC>,  # 0x<BASE> target-chip BootROM 基址
+        100000000,  # 0x<BASE> target-chip BootROM 基址
         1281,       # 0x<CODE_A>
         260,        # 0x<CODE_B>
         1029,       # 0x<CODE_C>

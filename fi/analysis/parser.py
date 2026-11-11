@@ -5,7 +5,7 @@
 
     from fi.analysis.parser import load_raw_csv, clean_typed, to_jsonl
 
-    df_raw = load_raw_csv(r"D:\\project\\FI\\<DATASET>.csv")
+    df_raw = load_raw_csv(r"<PROJECT_ROOT>\\<DATASET>.csv")
     df = clean_typed(df_raw, convert_ns=True)   # convert_ns=False 关闭换算
     to_jsonl(df, "data/derived/<DATASET>.typed.jsonl")
 

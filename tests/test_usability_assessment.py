@@ -20,7 +20,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _noise_image(size: int = 8192, seed: int = 20261110) -> bytes:
+def _noise_image(size: int = 8192, seed: int = 19991231) -> bytes:
     rng = random.Random(seed)
     return bytes(rng.getrandbits(8) for _ in range(size))
 

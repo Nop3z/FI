@@ -80,7 +80,8 @@ def step_one_instruction(
     import capstone
 
     md = capstone.Cs(capstone.CS_ARCH_RISCV,
-                     capstone.CS_MODE_RISCV32 if xlen == 32 else capstone.CS_MODE_RISCV64)
+                     (capstone.CS_MODE_RISCV32 if xlen == 32 else capstone.CS_MODE_RISCV64)
+                     | capstone.CS_MODE_RISCVC)
     try:
         insn = next(md.disasm(insn_bytes, exec_addr))
         insn_text = f"{insn.mnemonic} {insn.op_str}".strip()

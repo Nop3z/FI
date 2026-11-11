@@ -132,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="NAME=VALUE",
         default=None,
-        help="入口前预置通用寄存器（如 sp=0x42048000；跳过复位前段直接进函数时必需，hypothesis 级假设）",
+        help="入口前预置通用寄存器（如 sp=0x<TARGET>8000；跳过复位前段直接进函数时必需，hypothesis 级假设）",
     )
 
     tp = sub.add_parser(
@@ -156,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="NAME=VALUE",
         default=None,
-        help="入口前预置通用寄存器（如 sp=0x42048000；直接跳进函数时必需，hypothesis 级假设）",
+        help="入口前预置通用寄存器（如 sp=0x<TARGET>8000；直接跳进函数时必需，hypothesis 级假设）",
     )
 
     # ---- 轨迹读回：binary → 契约 JSONL ----

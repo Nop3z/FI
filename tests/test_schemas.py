@@ -137,7 +137,7 @@ def test_fault_context_minimal_and_unknown_fields() -> None:
 def test_campaign_record_minimal() -> None:
     record = {
         "schema_version": "0.2",
-        "campaign_id": "camp-<DATE>-test01",
+        "campaign_id": "camp-19991231-test01",
         "params": {
             "raw_delay": 3145,
             "raw_pulse": 2,
@@ -171,10 +171,10 @@ def test_experiment_scan_minimal() -> None:
             {"axis": "pulse", "min_value": 2, "max_value": 6, "step_value": "unknown", "unit": "raw"},
         ],
         "unit_assumption": {"scale": "1 raw unit = 10 ns", "evidence_level": "hypothesis"},
-        "records_ref": {"path": "data/derived/scan-test.jsonl", "count": 740209, "checksum": "unknown"},
+        "records_ref": {"path": "data/derived/scan-test.jsonl", "count": 123456, "checksum": "unknown"},
         "summary": {
-            "total_records": 740209,
-            "by_state": {"SUCCESS": {"count": 4616, "delay_min": 3130, "delay_max": 3190}},
+            "total_records": 123456,
+            "by_state": {"SUCCESS": {"count": 1234, "delay_min": 3130, "delay_max": 3190}},
         },
         "evidence_level": "observation",
         "timestamp": "unknown",
@@ -246,7 +246,7 @@ def test_sim_trace_all_line_types() -> None:
                 "path": "<ROM_IMAGE>",
                 "sha256": "e" * 64,
                 "size_bytes": 131072,
-                "base_address": <BASE_DEC>,
+                "base_address": 100000000,
             },
             "engine": {"name": "stub", "version": "0.0.0"},
             "profile_ref": "unknown",

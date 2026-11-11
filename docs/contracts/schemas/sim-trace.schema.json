@@ -49,12 +49,12 @@
             "base_address": {
               "type": "integer",
               "minimum": 0,
-              "description": "加载基址（用户给定事实，如 0x<BASE> 用十进制 <BASE_DEC>）。",
-              "examples": [<BASE_DEC>]
+              "description": "加载基址（用户给定事实，如 0x<BASE> 用十进制 100000000）。",
+              "examples": [100000000]
             }
           },
           "examples": [
-            { "path": "<ROM_IMAGE>", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "size_bytes": 131072, "base_address": <BASE_DEC> }
+            { "path": "<ROM_IMAGE>", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "size_bytes": 131072, "base_address": 100000000 }
           ]
         },
         "engine": {
@@ -132,7 +132,7 @@
           "$ref": "common.defs.json#/$defs/object_or_unknown",
           "description": "寄存器写回 {reg, value_old, value_new}。逐条捕获成本高时整体写 unknown（引擎可提供 verbose 开关）。",
           "examples": [
-            { "reg": "t0", "value_old": 0, "value_new": <BASE_DEC> },
+            { "reg": "t0", "value_old": 0, "value_new": 100000000 },
             "unknown"
           ]
         },

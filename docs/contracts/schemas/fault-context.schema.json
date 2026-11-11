@@ -23,7 +23,7 @@
     "campaign_id": {
       "description": "关联的注入实验（CampaignRecord.campaign_id）；无法关联时写 unknown。",
       "$ref": "common.defs.json#/$defs/string_or_unknown",
-      "examples": ["camp-<DATE>-0042", "unknown"]
+      "examples": ["camp-19991231-0042", "unknown"]
     },
 
     "source_provider": {

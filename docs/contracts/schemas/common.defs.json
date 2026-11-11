@@ -96,7 +96,7 @@
       "type": "string",
       "minLength": 1,
       "description": "实例唯一标识。建议格式：{类型前缀}-{UTC日期}-{短随机}，如 ctx-20261109-a1b2c3；也可用 UUID。",
-      "examples": ["ctx-20261109-a1b2c3", "camp-<DATE>-0042"]
+      "examples": ["ctx-20261109-a1b2c3", "camp-19991231-0042"]
     },
     "data_ref": {
       "type": "object",

@@ -18,7 +18,7 @@
     "campaign_id": {
       "$ref": "common.defs.json#/$defs/id",
       "description": "本条实验记录唯一 ID。",
-      "examples": ["camp-<DATE>-0042"]
+      "examples": ["camp-19991231-0042"]
     },
 
     "params": {

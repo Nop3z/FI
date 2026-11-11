@@ -283,7 +283,7 @@ def load_config(path: str | Path) -> SimConfig:
 
 
 def _parse_initial_regs(value: Any) -> dict[str, int]:
-    """配置 `initial_regs: {"sp": "0x42044000", ...}` → 入口前预置寄存器。
+    """配置 `initial_regs: {"sp": "0x<TARGET>4000", ...}` → 入口前预置寄存器。
 
     用途：跳过复位前段直接进入某个函数（如 ISP handler 试运行）时，
     该函数期望的寄存器/栈上下文必须显式给出——这是 hypothesis 级输入，
