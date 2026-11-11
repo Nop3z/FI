@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<!--
+  FI · RISC-V 观测 — 只读故障观测/分析/仿真看板（深色面板 · 参考截图 1:1 复刻）
+
+  基于 ViewViewView (https://github.com/Nop3z/ViewViewView) 的代码修改/复制而来。
+  原项目以 MulanPSL-2.0 (http://license.coscl.org.cn/MulanPSL2) 许可。
+  本文件按 MulanPSL-2.0 第 4 条保留原版权与许可声明。
+  许可证全文副本：dashboard/vendor/viewviewview/LICENSE（分发时随附）。
+
+  复用片段清单（来源路径 + 函数/选择器）：
+    - dashboard/vendor/viewviewview/src/viewviewview/static/index.mjs
+        #updatestatchart        柱高按图内最高桶归一化、data-tip 记录真实占比
+        #buildstatchart         柱池 + 基线的常量节点构建（象限布局见 .vvv-stats-layout）
+        #attachstatshovertag    图窗级共享悬停提示标签
+        #buildcountstable       汇总两列表（state | count，count 绿色右对齐）结构
+        #buildfooter            底部状态行「已记录 n 行 / 当前窗口 m 行 · live」结构
+      （函数名保持原样；适配为 FI 的 /api/histogram 契约，桶为 {delay_raw, count}。
+       buildStatChart 增加 plotPx 参数以支持通高第三图。
+       未复用 render() 的 model 绑定段 index.mjs:42-101，改为 fetch 轮询直调。）
+    - dashboard/vendor/viewviewview/src/viewviewview/static/styles.css
+        .vvv-root/.vvv-pane/.vvv-band/.vvv-stats-layout  布局骨架 → .panel/.block/.panel-body/.col-*
+        .vvv-stat-chart/.vvv-stat-col/.vvv-stat-fill/.vvv-stat-lab/.vvv-stat-baseline/.vvv-stats-tip
+        .vvv-table 表头下划线 + 数值右对齐约定；.vvv-footer/.vvv-live 底部状态行
+      （配色按用户参考截图逐像素实测值替换：
+        页面白底 #ffffff / 面板 #23282e / 内区 #1d2226 / 细缝 #2c3137 /
+        表格数字绿 VVV #19ff25（--num-strong，仅表格数字）/ AI 卡片等沿用 #55a64d（--num） / 柱色 SUCCESS #19ff25 · HANG #e05252（VVV .vvv-stat-fill--hang 原值） · UNEXPECTED #4d33ff /
+        state 近白 #e9edf0 · response 淡蓝白 #e2f0fd · 刻度灰 #727a85 ·
+        图例灰 #888c95 · 表头线 #878791 · 底部 live 绿 #4a8c4f + 灰 #898d96）
+
+  展示纪律：本页 DOM 构造遵守上游 createElement/textContent 禁 innerHTML 约定
+  （REUSE.md §2.6）；状态标签按原始字面量；语义未确认；ns = raw × 10 为假设；
+  只读——不含任何注入/执行/控制类按钮，仅刷新与筛选。
+  数据接口均为 GET JSON（契约见 /api/contracts）；此文件不覆盖旧 index.html。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FI · RISC-V 观测</title>
+<style>
+/* ============ tokens（参考截图实测色板） ============ */
+:root{
+  --page:#ffffff;         /* 页面白底（参考图 Notebook 页面） */
+  --panel:#23282e;        /* 面板深蓝灰底 */
+  --inset:#1d2226;        /* 面板内区底色 */
+  --seam:#2c3137;         /* 区块间细缝 / 基线 */
+  --fg:#ffffff;           /* 标题/表头白 */
+  --fg-state:#e9edf0;     /* state 标签近白 */
+  --fg-blue:#e2f0fd;      /* errcode/response 淡蓝白 */
+  --num:#55a64d;          /* 数字绿：AI 卡片等沿用 */
+  --num-strong:#19ff25;   /* 表格数字绿（VVV --vvv-number 原值）：汇总 count、明细 delay/pulse */
+  --tick:#727a85;         /* 刻度/次级灰 */
+  --legend:#888c95;       /* 图例灰 */
+  --rule:#878791;         /* 表头下 1px 分隔线 */
+  --live:#4a8c4f;         /* 底部 live 绿 */
+  --foot:#898d96;         /* 底部状态灰 */
+  --c-success:#19ff25;    /* 柱色：SUCCESS（VVV styles.css:29 --vvv-count 默认柱色） */
+  --c-hang:#e05252;       /* 柱色：HANG 红（对齐 VVV .vvv-stat-fill--hang） */
+  --c-unexpected:#4d33ff; /* 柱色：UNEXPECTED（VVV styles.css:221-225） */
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--page);
+  color:var(--fg);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+  line-height:1.45;
+}
+
+/* ============ 深色面板（白底页面居中一块） ============ */
+.panel{width:93%;margin:18px auto 0;background:var(--panel);border-radius:6px;padding:8px 10px}
+.panel-body{display:flex;gap:3px;background:var(--seam)}
+.block{background:var(--inset);border-radius:3px;min-width:0}
+
+/* -- 顶栏（极简一行，融入面板顶部，不抢主体） -- */
+.strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 8px 12px}
+.brand{display:flex;align-items:baseline;gap:8px;margin-right:4px}
+.brand h1{font-size:14px;font-weight:600;color:var(--fg)}
+.brand .sub{font-size:11px;color:var(--tick)}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:3px;background:var(--inset);font-size:11px;color:var(--foot);white-space:nowrap}
+.pill b{color:var(--fg-state);font-weight:600}
+.spacer{flex:1 1 auto;min-width:8px}
+.clock{font-size:11px;color:var(--tick);white-space:nowrap}
+button.refresh{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 14px;border:none;border-radius:3px;
+  background:var(--seam);color:var(--fg-state);
+  font-size:12px;font-family:inherit;cursor:pointer;
+}
+button.refresh:hover{background:#3a4149;color:var(--fg)}
+button.refresh:active{transform:scale(.97)}
+button.refresh.spin svg{animation:spin 1s linear infinite}
+button.refresh svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ============ 面板主体：左栏 45%（汇总表+明细） · 右栏 55%（三图） ============ */
+.col-left{flex:0 0 45%;display:flex;flex-direction:column;gap:3px;min-width:0;min-height:0}
+.col-right{flex:1 1 auto;display:flex;gap:3px;min-width:0}
+.detail-block{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+
+/* -- 状态汇总表（state | count，紧凑两列表） -- */
+.counts-block{flex:0 0 auto}
+.counts-table{width:max-content;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.counts-table thead th{text-align:left;padding:6px 10px;color:var(--fg);font-size:11.5px;font-weight:600;border-bottom:1px solid var(--rule);white-space:nowrap}
+.counts-table thead th.num{text-align:right}
+.counts-table tbody td{padding:4px 10px;font-size:12.5px;color:var(--fg-state);white-space:nowrap}
+.counts-table tbody td.num{color:var(--num-strong);text-align:right;font-variant-numeric:tabular-nums}
+
+/* -- 实时明细表 -- */
+.tblwrap{flex:1 1 auto;min-height:120px;overflow:auto;border-radius:3px}
+.tblwrap::-webkit-scrollbar{width:6px}
+.tblwrap::-webkit-scrollbar-track{background:transparent}
+.tblwrap::-webkit-scrollbar-thumb{background:var(--seam);border-radius:3px}
+.tblwrap::-webkit-scrollbar-thumb:hover{background:#3a4149}
+table.grid{width:max-content;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12.5px}
+/* 表头：白字，表头下唯一一条 1px #878791 线；无斑马纹、无行分隔线 */
+table.grid thead th{
+  position:sticky;top:0;z-index:2;
+  text-align:left;padding:6px 10px;
+  background:var(--inset);
+  color:var(--fg);font-size:11.5px;font-weight:600;white-space:nowrap;
+  border-bottom:1px solid var(--rule);
+}
+table.grid thead th.num,table.grid td.num{text-align:right}
+/* 参考图配色：state 近白、delay/pulse 绿数字、response 淡蓝白、布尔列弱灰 */
+table.grid tbody td.num{color:var(--num-strong);font-variant-numeric:tabular-nums}
+table.grid tbody td:first-child{color:var(--fg-state)}
+table.grid tbody td{
+  padding:4px 10px;color:var(--fg-blue);
+  white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;
+}
+table.grid tbody td.dim{color:var(--foot)}
+/* 最新行仅极轻微加深（参考图做法），不醒目高亮 */
+table.grid tbody tr:first-child{background:#202529}
+table.grid tbody tr:hover td{background:rgba(255,255,255,.02)}
+/* 新行推入动画：从 0 高/透明展开 0.35s（不做彩色闪光） */
+table.grid tbody tr.fresh td{animation:pushin .35s ease-out}
+@keyframes pushin{
+  from{max-height:0;opacity:0;padding-top:0;padding-bottom:0}
+  to{max-height:30px;opacity:1;padding-top:4px;padding-bottom:4px}
+}
+
+/* -- 右栏：三张分布图（左子列 SUCCESS/HANG 上下叠放 · 右子列 UNEXPECTED 通高） -- */
+.charts-col{flex:1 1 0;min-width:0;min-height:0;display:flex;flex-direction:column;gap:3px}
+/* 弹性高度：SUCCESS/HANG 两块平分 charts-col（各占一半）；tall 贴底、内容沉底 */
+.chart-block{flex:1 1 0;min-height:0;background:var(--inset);border-radius:3px;padding:10px;min-width:0;display:flex;flex-direction:column}
+.chart-block.tall{flex:1 1 0;justify-content:flex-end}
+.hist-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.hist-head b{font-size:12px;font-weight:600;color:var(--fg)}
+.legend{display:inline-flex;align-items:center;gap:5px}
+.legend .sw{width:8px;height:8px;display:inline-block;border-radius:1px}
+.legend .val{font-size:10px;color:var(--legend)}
+.fill-SUCCESS{background:var(--c-success)}
+.fill-HANG{background:var(--c-hang)}
+.fill-UNEXPECTED{background:var(--c-unexpected)}
+/* 图表骨架复用 ViewViewView styles.css（.vvv-stat-chart 等）：无网格线，仅底部基线；
+   弹性高度：flex 填满所在 .chart-block（SUCCESS/HANG 随块各半 · UNEXPECTED 通高），
+   min-height 200px = 116px 最小绘图形 + 84px 标签区（窄模式防塌缩） */
+.stat-chart{align-items:flex-end;display:flex;gap:1px;min-width:0;position:relative;flex:1 1 auto;min-height:200px}
+.stat-baseline{border-top:1px solid var(--seam);left:0;right:0;pointer-events:none;position:absolute}
+.stat-col{display:flex;flex:1 1 0;flex-direction:column;justify-content:flex-end;min-width:0}
+.stat-fill{flex:0 0 auto;height:0;width:100%;border-radius:1px 1px 0 0;min-height:1px;transition:height .45s ease-out}
+.stat-col:hover .stat-fill{filter:brightness(1.15)}
+/* X 轴刻度标签：delay 区间（如 3135-3140，9 字符）垂直排（对齐 VVV .vvv-stat-lab
+   84px 原值，自下而上阅读），灰 #727a85；overflow:hidden 防溢出遮挡 */
+.stat-lab{display:flex;align-items:center;justify-content:center;flex:0 0 84px;color:var(--tick);font-size:10px;overflow:hidden;white-space:nowrap;font-variant-numeric:tabular-nums;writing-mode:vertical-rl;transform:rotate(180deg)}
+.axis-note{margin-top:6px;font-size:10px;color:var(--tick);min-height:14px}
+.hist-tip{
+  position:absolute;display:none;pointer-events:none;z-index:5;
+  transform:translate(-50%,-100%);
+  background:var(--seam);border:1px solid #3a4149;border-radius:3px;
+  padding:3px 7px;font-size:10px;color:var(--fg-state);white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+
+/* -- 面板底部状态行（右下：灰字 + 绿 live） -- */
+.panel-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:10px 8px 4px;font-size:11px;color:var(--foot);font-variant-numeric:tabular-nums}
+.panel-foot .live{display:inline-flex;align-items:center;gap:4px;color:var(--live)}
+.panel-foot .live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--live);display:inline-block}
+
+/* ============ 面板下方可折叠区（AI 活动 / 契约，同一深蓝灰底） ============ */
+.fold{width:93%;margin:14px auto 0;background:var(--panel);border-radius:6px}
+details.fold>summary{cursor:pointer;list-style:none;padding:12px 16px;font-size:12px;color:var(--foot);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary:hover{color:var(--fg-state)}
+.fold summary .hint{font-size:10.5px;color:var(--tick);font-weight:400}
+.fold summary .chev{font-size:10px;color:var(--tick);transition:transform .2s ease}
+details.fold[open]>summary .chev{transform:rotate(90deg)}
+.fold-body{padding:0 16px 16px;display:flex;flex-direction:column;gap:14px}
+
+/* -- AI 活动 -- */
+.activity .mini{display:flex;gap:10px;flex-wrap:wrap}
+.mini-card{flex:1 1 130px;background:var(--inset);border-radius:3px;padding:12px 14px;min-width:0}
+.mini-card .k{font-size:11px;color:var(--tick)}
+.mini-card .v{font-size:22px;font-weight:600;color:var(--num);font-variant-numeric:tabular-nums}
+.mini-card .v.fail{color:var(--c-hang)}
+.mini-card .v.run{color:var(--c-unexpected)}
+.toolbars{display:flex;flex-direction:column;gap:6px}
+.trow{display:flex;align-items:center;gap:10px;font-size:11px}
+.trow .tn{flex:0 0 168px;color:var(--foot);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .tb{flex:1;height:4px;border-radius:2px;background:var(--inset);overflow:hidden}
+.trow .tb i{display:block;height:100%;background:var(--num);transition:width .5s ease}
+.trow .tc{flex:0 0 44px;text-align:right;color:var(--tick);font-variant-numeric:tabular-nums}
+.recent{display:flex;flex-direction:column;gap:5px;max-height:264px;overflow:auto}
+.rc{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:3px;background:var(--inset)}
+.rc .dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--tick)}
+.rc.running .dot{background:var(--c-unexpected);animation:breath 1.6s ease-in-out infinite}
+.rc.ok .dot{background:var(--num)}
+.rc.fail .dot{background:var(--c-hang)}
+.rc .tool{font-size:11px;color:var(--fg-state);flex:0 0 auto}
+.rc .args{flex:1;min-width:0;font-size:11px;color:var(--tick);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc .dur{font-size:11px;color:var(--tick);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.rc.running .dot{animation:breath 1.6s ease-in-out infinite}
+@keyframes breath{0%,100%{opacity:1}50%{opacity:.45}}
+
+/* -- 契约区 -- */
+.crow{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--foot)}
+.crow b{color:var(--fg-state);font-weight:600}
+.schema-list{display:flex;gap:8px;flex-wrap:wrap}
+.schema-list code{font-size:11px;padding:3px 9px;border-radius:3px;background:var(--inset);color:var(--foot)}
+.warnbox{display:flex;flex-direction:column;gap:6px}
+.warnbox .w{font-size:11.5px;color:var(--c-hang);background:rgba(224,82,82,.08);border:1px solid rgba(224,82,82,.25);border-radius:3px;padding:8px 12px}
+.warnbox .none{color:var(--tick);font-size:12px}
+.ver-list{display:flex;flex-direction:column;gap:4px}
+.ver-list .vr{font-size:11px;color:var(--tick)}
+.footer-note{font-size:11px;color:var(--tick)}
+
+/* ============ 响应式 ============ */
+@media (max-width:1100px){
+  .panel-body{flex-direction:column}
+  .col-left{flex:1 1 auto}
+  .col-right{flex-direction:column}
+  /* 窄模式无整屏定高：图表块改按内容自然高（.stat-chart min-height 200 兜底），
+     flex 平分/贴底仅在桌面（≥1101px 定高 panel-body）下生效 */
+  .charts-col{flex:0 0 auto}
+  .chart-block,.chart-block.tall{flex:0 0 auto}
+  .trow .tn{flex-basis:120px}
+}
+/* 桌面优先（≥1101px）：主面板一屏收纳，明细表内部滚动 */
+@media (min-width:1101px){
+  .panel-body{height:calc(100vh - 110px);min-height:560px}
+}
+@media (max-width:640px){
+  .panel{width:97%;margin-top:16px}
+  .fold{width:97%}
+}
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <header class="strip">
+    <div class="brand">
+      <h1>FI · RISC-V 观测</h1>
+      <span class="sub">只读看板</span>
+    </div>
+    <span class="pill" id="pill-contract">契约 <b>—</b></span>
+    <span class="pill">语义 unconfirmed-v0.1</span>
+    <span class="pill">ns = raw × 10（假设）</span>
+    <span class="spacer"></span>
+    <span class="clock" id="clock">—</span>
+    <button class="refresh" id="btn-refresh" title="立即刷新全部数据">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+      刷新
+    </button>
+  </header>
+
+  <div class="panel-body">
+    <!-- 左栏 45%：状态汇总表 + 实时明细 -->
+    <div class="col-left">
+      <section class="block counts-block" aria-label="状态汇总">
+        <div id="states"><!-- JS 生成 state | count 汇总表 --></div>
+      </section>
+      <section class="block detail-block" aria-label="实时明细">
+        <div class="tblwrap">
+          <table class="grid" id="rec-table">
+            <thead><tr>
+              <th>state</th>
+              <th class="num">delay·raw</th>
+              <th class="num">pulse·raw</th>
+              <th>response</th><th>glitched</th><th>unexpected</th>
+            </tr></thead>
+            <tbody id="rec-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- 右栏 55%：左子列 SUCCESS/HANG 上下叠放 · 右子列 UNEXPECTED 通高 -->
+    <div class="col-right" id="hist-grid"><!-- JS 生成三张分布图 --></div>
+  </div>
+
+  <div class="panel-foot">
+    <span id="rec-total">—</span>
+    <span id="rec-updated">尚未加载 · 2s 自动刷新</span>
+    <span class="live">live</span>
+  </div>
+</div>
+
+<!-- AI 活动（可折叠，同一深蓝灰底） -->
+<details class="fold activity">
+  <summary><span class="chev">▶</span>AI 活动 <span class="hint">3s 轮询 · 只读展示</span></summary>
+  <div class="fold-body">
+    <div class="mini" id="ai-mini"></div>
+    <div class="toolbars" id="ai-tools"></div>
+    <div class="recent" id="ai-recent"></div>
+  </div>
+</details>
+
+<!-- 契约区（可折叠，同一深蓝灰底） -->
+<details class="fold">
+  <summary><span class="chev">▶</span>契约与单位假设 <span class="hint">语义未确认 · 展开查看</span></summary>
+  <div class="fold-body">
+    <div class="crow">契约版本 <b id="ct-version">未知</b> · schema 常量 <b id="ct-schema">未知</b> · 状态语义 <b id="ct-semantics">未知</b></div>
+    <div>
+      <div class="footer-note" style="margin-bottom:6px">schema 清单</div>
+      <div class="schema-list" id="ct-schemas"><span class="footer-note">未知</span></div>
+    </div>
+    <div>
+      <div class="footer-note" style="margin-bottom:6px">告警（后端 warnings 原样列出）</div>
+      <div class="warnbox" id="ct-warnings"><span class="none">未知</span></div>
+    </div>
+    <div>
+      <div class="footer-note" style="margin-bottom:6px">近期版本</div>
+      <div class="ver-list" id="ct-versions"><span class="footer-note">未知</span></div>
+    </div>
+  </div>
+</details>
+
+<script>
+"use strict";
+/* =====================================================================
+ * AI 配置指南（只读看板：无任何配置控件；配置入口仅此对象 + URL 白名单覆盖）
+ *
+ * 用法 A · 改文件：直接编辑下方 window.FI_CONFIG 的字段值（长期默认）。
+ * 用法 B · 改 URL ：页面查询参数按次覆盖（AI/脚本注入），仅收以下白名单并
+ *                   严格校验；非法值静默忽略并保持默认（不抛错、不空白页）。
+ *                   URL 优先于文件值，两类配置可叠加。
+ *
+ *   参数              类型   合法范围 / 校验规则                     覆盖目标
+ *   ──────────────────────────────────────────────────────────────────────────
+ *   limit             整数   1–500（纯数字）                         records.defaultLimit；
+ *                                                                不在下拉候选内时自动
+ *                                                                追加为「条数」选项
+ *   poll_records      整数   ≥500（毫秒，纯数字）                    poll.records
+ *   poll_activity     整数   ≥500                                    poll.activity
+ *   poll_histogram    整数   ≥500                                    poll.histogram
+ *   bin               整数   1–100                                   hist.binWidth（宽 ≤1 时
+ *                                                                区间标签退化为单值）
+ *   color_success     颜色   #RRGGBB（6 位 hex，大小写均可）         colors.success → CSS --c-success
+ *   color_hang        颜色   #RRGGBB                                 colors.hang    → CSS --c-hang
+ *   color_unexpected  颜色   #RRGGBB                                 colors.unexpected → CSS --c-unexpected
+ *   state             枚举   FL | HANG | SUCCESS | UNEXPECTED |      state.initial（初始筛选，
+ *                        Fake_Success 五个字面量之一                 预置左上筛选 chip 选中态）
+ *
+ *   示例 URL：index.html?limit=50&bin=10&color_hang=%23ff0000
+ *             index.html?poll_records=1000&poll_activity=2000&state=HANG
+ *   ⚠ 颜色里的 “#” 在 URL 中必须转义为 %23 —— # 是 URL 锚点起始符，不转义会
+ *     截断查询串，导致该参数（及其后所有参数）丢失。
+ *   自检：启动完成后控制台打印一次 “[FI] effective config”（文件值 + URL 覆盖后的终值）。
+ * ===================================================================== */
+window.FI_CONFIG = {
+  /* —— 轮询间隔（毫秒）。下限 500：过密轮询会压垮后端 —— */
+  poll: {
+    records: 2000,     /* 左栏「实时明细」轮询间隔（原 REFRESH_RECORDS_MS） */
+    activity: 3000,    /* 折叠区「AI 活动」轮询间隔（原 REFRESH_ACTIVITY_MS） */
+    histogram: 30000   /* 右栏三张 delay 分布图轮询间隔（原 REFRESH_HIST_MS） */
+  },
+  /* —— 实时明细表 —— */
+  records: {
+    defaultLimit: 30,            /* 初始加载条数，整数 1–500（原 currentLimit 初值） */
+    limitChoices: [30, 50, 100]  /* 「条数」下拉候选，JS 据此生成 option（原静态三 option） */
+  },
+  /* —— 分布图展示桶宽（delay·raw 单位）—— */
+  hist: {
+    binWidth: 5  /* 逐 raw 计数聚合为 [lo, lo+binWidth) 区间桶（原 HIST_BIN_RAW）；
+                    宽 ≤1 时区间标签退化为单值（退化规则随本值联动） */
+  },
+  /* —— 三状态柱色（#RRGGBB）。启动时写回 :root 的
+   *    --c-success/--c-hang/--c-unexpected；:root 默认值仅作脚本失败时兜底 —— */
+  colors: {
+    success: "#19ff25",
+    hang: "#e05252",
+    unexpected: "#4d33ff"
+  },
+  /* —— 初始 state 筛选与状态白名单 —— */
+  state: {
+    initial: "",  /* 初始筛选："" = 全部（默认）；仅接受 allowed 之一（URL ?state= 同规） */
+    allowed: ["FL", "HANG", "SUCCESS", "UNEXPECTED", "Fake_Success"]  /* 主体 STATES 常量来源 */
+  }
+};
+
+/** URL 查询参数覆盖（白名单 + 严格校验）：非法值静默忽略并保持默认，绝不抛错。 */
+function fiApplyUrlOverrides(cfg) {
+  if (typeof location === "undefined" || typeof URLSearchParams === "undefined") return;
+  var params = new URLSearchParams(location.search);
+  /** 纯数字整数读取：非 ^\d+$ 或越界 → null（静默忽略）。 */
+  var getInt = function (key, min, max) {
+    var raw = params.get(key);
+    if (raw === null || !/^\d+$/.test(raw)) return null;
+    var n = Number(raw);
+    return Number.isInteger(n) && n >= min && n <= max ? n : null;
+  };
+  var n;
+  n = getInt("limit", 1, 500);               if (n !== null) cfg.records.defaultLimit = n;
+  n = getInt("poll_records", 500, Infinity); if (n !== null) cfg.poll.records = n;
+  n = getInt("poll_activity", 500, Infinity); if (n !== null) cfg.poll.activity = n;
+  n = getInt("poll_histogram", 500, Infinity); if (n !== null) cfg.poll.histogram = n;
+  n = getInt("bin", 1, 100);                 if (n !== null) cfg.hist.binWidth = n;
+  var state = params.get("state");
+  if (state !== null && cfg.state.allowed.indexOf(state) !== -1) cfg.state.initial = state;
+  var colorMap = {
+    color_success: { key: "success", cssVar: "--c-success" },
+    color_hang: { key: "hang", cssVar: "--c-hang" },
+    color_unexpected: { key: "unexpected", cssVar: "--c-unexpected" }
+  };
+  for (var param in colorMap) {
+    var raw = params.get(param);
+    if (raw === null || !/^#[0-9a-fA-F]{6}$/.test(raw)) continue;  /* 仅 #RRGGBB 合法 */
+    cfg.colors[colorMap[param].key] = raw.toLowerCase();
+  }
+}
+
+/** 把 cfg.colors 写回 :root CSS 变量（CONFIG 是唯一活配置源；:root 仅为兜底）。
+ *  值本身再校验一次：文件被改成非法值时跳过该项，CSS 兜底继续生效。 */
+function fiApplyColors(cfg) {
+  var map = { success: "--c-success", hang: "--c-hang", unexpected: "--c-unexpected" };
+  for (var key in map) {
+    if (typeof cfg.colors[key] === "string" && /^#[0-9a-fA-F]{6}$/.test(cfg.colors[key])) {
+      document.documentElement.style.setProperty(map[key], cfg.colors[key].toLowerCase());
+    }
+  }
+}
+
+/** 生效配置快照（逐组拷贝，避免日志引用活对象被后续修改误读）。 */
+function fiConfigSnapshot(cfg) {
+  return {
+    poll: { records: cfg.poll.records, activity: cfg.poll.activity, histogram: cfg.poll.histogram },
+    records: { defaultLimit: cfg.records.defaultLimit, limitChoices: cfg.records.limitChoices.slice() },
+    hist: { binWidth: cfg.hist.binWidth },
+    colors: { success: cfg.colors.success, hang: cfg.colors.hang, unexpected: cfg.colors.unexpected },
+    state: { initial: cfg.state.initial, allowed: cfg.state.allowed.slice() }
+  };
+}
+
+/* 启动期执行一次：URL 覆盖必须先于下方所有 var XX = FI_CONFIG.… 取值完成 */
+fiApplyUrlOverrides(window.FI_CONFIG);
+fiApplyColors(window.FI_CONFIG);
+
+/* =====================================================================
+ * 复用自 ViewViewView（MulanPSL-2.0）
+ * 来源：dashboard/vendor/viewviewview/src/viewviewview/static/index.mjs
+ *   - buildStatChart (#buildstatchart)         柱池/基线常量节点（增 plotPx 支持通高图）
+ *   - updateStatChart (#updatestatchart)       柱高按最高桶归一化 + data-tip
+ *   - attachStatsHoverTag (#attachstatshovertag) 图窗级共享悬停提示
+ *   - buildCountsTable (#buildcountstable)     汇总两列表结构（state | count）
+ *   - buildFooter (#buildfooter)               底部「已记录 n 行 / 当前窗口 m 行 · live」
+ * 仅适配 FI /api/histogram 契约：桶为 {delay_raw, count} 点序列。
+ * ===================================================================== */
+
+/** 旧固定绘区高（SUCCESS/HANG）：弹性高度改造后不再用于布局，仅作 buildStatChart
+ *  兼容参数保留（文件头复用清单记载该参数）；实际柱高由 updateStatChart 实测图高得出。 */
+var FI_STAT_PLOT_PX = 150;
+/** 旋转刻度标签区高（VVV styles.css:233 flex:0 0 84px 原值）：
+ *  区间标签 9 字符（如 3135-3140）在 10px 字号下所需宽度。 */
+var FI_STAT_LABEL_PX = 84;
+/** 旧通高第三图（UNEXPECTED）固定 plot 高：同 FI_STAT_PLOT_PX 仅保留兼容。 */
+var FI_STAT_PLOT_TALL_PX = 320;
+
+/** @returns {boolean} True for non-array JSON objects.（ViewViewView） */
+function isPayloadObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** @returns {string} Number as text with a fallback for missing fields.（ViewViewView） */
+function toCount(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : fallback;
+}
+
+/** @returns {string} Text for a cell; null/undefined must show as "".（ViewViewView） */
+function toDisplayText(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+/** @returns {void}（ViewViewView clearChildren） */
+function clearChildren(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+/**
+ * One chart block: header (`title` + grey legend) plus a fixed pool of
+ * `bars` columns (fill + rotated label), hidden until data arrives.
+ * （复用自 ViewViewView buildStatChart，DOM 骨架一致；图例色票按参考图
+ *  右上角灰字状态名 + 状态色小方块约定渲染）
+ */
+function buildStatChart(title, stateLabel, bars, fillCls, plotPx) {
+  /* plotPx 参数保留（文件头复用清单约定）；三图高度已弹性化（.stat-chart flex
+     填满 .chart-block），不再写内联固定高，绘区高由 updateStatChart 每次实测。 */
+  var head = document.createElement("div");
+  head.className = "hist-head";
+  var b = document.createElement("b");
+  b.textContent = title;
+  var legend = document.createElement("span");
+  legend.className = "legend";
+  var sw = document.createElement("span");
+  sw.className = "sw " + fillCls;
+  var val = document.createElement("span");
+  val.className = "val";
+  val.textContent = stateLabel || "";
+  legend.appendChild(sw);
+  legend.appendChild(val);
+  head.appendChild(b);
+  head.appendChild(legend);
+
+  var chart = document.createElement("div");
+  chart.className = "stat-chart";
+  var baseline = document.createElement("div");
+  baseline.className = "stat-baseline";
+  baseline.style.bottom = FI_STAT_LABEL_PX + "px";
+  chart.appendChild(baseline);
+  var cols = [];
+  for (var index = 0; index < bars; index += 1) {
+    var col = document.createElement("div");
+    col.className = "stat-col";
+    col.style.display = "none";
+    var fill = document.createElement("div");
+    fill.className = "stat-fill" + (fillCls ? " " + fillCls : "");
+    var label = document.createElement("div");
+    label.className = "stat-lab";
+    col.appendChild(fill);
+    col.appendChild(label);
+    chart.appendChild(col);
+    cols.push(col);
+  }
+  return { head: head, chart: chart, cols: cols };
+}
+
+/**
+ * Align one chart's fixed column pool to the timeline view of `entries`:
+ * only changed texts/heights are written (no DOM nodes are created), and
+ * exact numbers ride in the `data-tip` attribute, which the pane-level
+ * hover tag prints above a column the moment the pointer enters it.
+ * Bar heights scale relative to the chart's tallest bucket; hover keeps
+ * reporting the TRUE share of the state's cumulative total.
+ * （复用自 ViewViewView updateStatChart；桶结构适配为 {delay_raw, count}）
+ */
+function updateStatChart(cols, chartEl, entries, maxBars, stateLabel) {
+  /* 测量式绘区高：渲染后实测 .stat-chart clientHeight（含 84px 标签区），每次更新
+     重新测量——弹性布局 / 窗口 resize 后柱高随图高重算；116px 下限防窄模式塌缩。 */
+  var plot = Math.max((chartEl ? chartEl.clientHeight : 0) - FI_STAT_LABEL_PX, 116);
+  var totalHits = 0;
+  for (var i = 0; i < entries.length; i += 1) totalHits += entries[i].count;
+  var maxHits = 0;
+  for (var j = 0; j < entries.length; j += 1) {
+    if (entries[j].count > maxHits) maxHits = entries[j].count;
+  }
+  var visible = entries.slice(Math.max(0, entries.length - maxBars));
+  for (var index = 0; index < cols.length; index += 1) {
+    var col = cols[index];
+    var entry = index < visible.length ? visible[index] : null;
+    if (entry === null) {
+      if (col.style.display !== "none") col.style.display = "none";
+      continue;
+    }
+    if (col.style.display !== "") col.style.display = "";
+    /* 区间标签：桶宽 >1 显示 lo-hi（如 3135-3140，含左不含右）；宽 ≤1 的退化
+       区间回退单值（不显示 3135-3136）；delay_raw 缺失按「?」兜底 */
+    var lo = typeof entry.delay_raw === "number" && Number.isFinite(entry.delay_raw) ? entry.delay_raw : null;
+    var hi = typeof entry.hi === "number" && Number.isFinite(entry.hi) ? entry.hi : null;
+    var label = lo === null ? "?" : (hi !== null && hi - lo > 1 ? lo + "-" + hi : toCount(lo, "?"));
+    var rate = maxHits > 0 ? Math.min(entry.count / maxHits, 1) : 0;
+    var share = totalHits > 0 ? Math.min(entry.count / totalHits, 1) : 0;
+    var tip = label + " raw · " + stateLabel + " " + entry.count + "/" + totalHits +
+      " · " + (share * 100).toFixed(1) + "%";
+    var height = Math.max(Math.round(rate * plot), 1);
+    var fillEl = col.children[0];
+    var labelEl = col.children[1];
+    if (labelEl.textContent !== label) labelEl.textContent = label;
+    if (col.dataset.tip !== tip) {
+      col.dataset.tip = tip;
+      col.setAttribute("aria-label", tip);
+    }
+    var storedHeight = parseFloat(fillEl.style.height);
+    if (!(Math.abs(storedHeight - height) <= 0.005)) {
+      fillEl.style.height = height + "px";
+    }
+  }
+}
+
+/**
+ * Hover tag: one shared floating element per chart pane. Moving the pointer
+ * over any visible bar instantly prints its exact numbers above the bar top
+ * (`data-tip` written by updateStatChart); leaving the pane hides it.
+ * （复用自 ViewViewView attachStatsHoverTag）
+ */
+function attachStatsHoverTag(pane) {
+  var tip = document.createElement("div");
+  tip.className = "hist-tip";
+  pane.appendChild(tip);
+  var hideTag = function () {
+    if (tip.style.display !== "none") tip.style.display = "none";
+  };
+  pane.addEventListener("mouseleave", hideTag);
+  pane.addEventListener("mouseover", function (event) {
+    var source = event.target;
+    var col = source && typeof source.closest === "function"
+      ? source.closest("div.stat-col") : null;
+    var text = col && col.style.display !== "none" ? col.dataset.tip : "";
+    if (!text) { hideTag(); return; }
+    var paneBox = pane.getBoundingClientRect();
+    var colBox = col.getBoundingClientRect();
+    if (tip.textContent !== text) tip.textContent = text;
+    tip.style.left = (colBox.left + colBox.width / 2 - paneBox.left) + "px";
+    tip.style.top = (colBox.top - paneBox.top - 4) + "px";
+    if (tip.style.display !== "block") tip.style.display = "block";
+  });
+}
+
+/* =====================================================================
+ * FI 看板主体
+ * ===================================================================== */
+
+var STATES = window.FI_CONFIG.state.allowed; /* 状态白名单单一来源：FI_CONFIG（?state= 校验同源） */
+/* 参考图：FL 与 Fake_Success 不画图（FL 收进折叠区计数，Fake_Success 仅汇总计数） */
+var HIST_FILL = {
+  SUCCESS: "fill-SUCCESS", HANG: "fill-HANG", UNEXPECTED: "fill-UNEXPECTED"
+};
+var HIST_BARS = 24;                 /* 每幅分布图柱数 */
+var HIST_STACKED = ["SUCCESS", "HANG"]; /* 左子列上下两张 */
+var HIST_TALL = "UNEXPECTED";       /* 右子列通高一张 */
+var REFRESH_RECORDS_MS = window.FI_CONFIG.poll.records;    /* 常量名保留，值收拢自 FI_CONFIG（默认 2000） */
+var REFRESH_ACTIVITY_MS = window.FI_CONFIG.poll.activity;  /* 同上（默认 3000） */
+var REFRESH_HIST_MS = window.FI_CONFIG.poll.histogram;    /* 同上（默认 30000） */
+
+var el = function (id) { return document.getElementById(id); };
+var fmtInt = function (n) { return typeof n === "number" && Number.isFinite(n) ? String(n) : "未知"; };  /* 纯整数，无千分位分组（用户显示层要求，全页一致） */
+
+/* ---------- 通用 fetch（后端不可达 → 演示数据） ---------- */
+var DEMO_ON = false;
+/* ?demo=1 预览模式：不连接后端，用演示生成器驱动与真实模式相同的增量插入路径 */
+var DEMO_MODE = typeof location !== "undefined" && /[?&]demo=1/.test(location.search);
+var DEMO_TICK_MS = 800;
+function apiGet(path) {
+  if (DEMO_MODE) {
+    if (!DEMO_ON) {
+      DEMO_ON = true;
+      console.warn("[FI] ?demo=1 预览模式：不连接后端，使用演示数据流。");
+      showDemoBanner();
+    }
+    if (path.indexOf("/api/records") === 0) {
+      return Promise.resolve(demoRecordsData());
+    }
+    return Promise.resolve(demoData(path));
+  }
+  return fetch(path, { cache: "no-store" }).then(function (res) {
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }).catch(function (err) {
+    if (!DEMO_ON) {
+      DEMO_ON = true;
+      console.warn("[FI] 后端不可达（" + err.message + "），启用演示数据。页面底部横幅已标注。");
+      showDemoBanner();
+    }
+    return demoData(path);
+  });
+}
+function showDemoBanner() {
+  var b = document.createElement("div");
+  b.id = "demo-banner";
+  b.style.cssText = "position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99;" +
+    "background:var(--panel);border:1px solid rgba(224,82,82,.45);border-radius:3px;" +
+    "padding:8px 18px;font-size:12px;color:var(--c-hang);white-space:nowrap";
+  b.textContent = "后端未连接 · 当前为演示数据，非实测结果";
+  document.body.appendChild(b);
+}
+/** 构造与契约同形的演示数据（仅首次生成，之后稳定以观察轮询行为）。 */
+var demoCache = {};
+function demoData(path) {
+  if (demoCache[path]) return demoCache[path];
+  var states = { FL: { count: 962 }, HANG: { count: 207 }, SUCCESS: { count: 6114 }, UNEXPECTED: { count: 63 }, Fake_Success: { count: 141 } };
+  var total = 0, k;
+  for (k in states) total += states[k].count;
+  var histSeries = STATES.map(function (st) {
+    var points = [], base = st === "SUCCESS" ? 480 : st === "HANG" ? 600 : st === "FL" ? 300 : 200;
+    for (var raw = base; raw < base + 240; raw += 10) {
+      var count = st === "SUCCESS" ? Math.max(2, 60 - Math.abs(raw - 560) / 4)
+        : st === "HANG" ? Math.max(1, 18 - Math.abs(raw - 760) / 12)
+        : Math.max(0, Math.round(Math.random() * 4));
+      if (count > 0) points.push({ delay_raw: raw, count: Math.round(count) });
+    }
+    return { state: st, total: states[st], points: points };
+  });
+  var rows = [];
+  var pool = ["SUCCESS", "FL", "HANG", "UNEXPECTED", "Fake_Success"];
+  for (var i = 0; i < 30; i += 1) {
+    var st = pool[Math.floor(Math.random() * pool.length)];
+    rows.push({
+      row_index: 9548 - i, state: st,
+      delay: 300 + Math.floor(Math.random() * 240),
+      pulse: 8 + Math.floor(Math.random() * 12),
+      response: st === "HANG" ? "未知" : "0x" + (Math.floor(Math.random() * 65536)).toString(16).padStart(4, "0"),
+      glitched: Math.random() > 0.5, unexpected: st === "UNEXPECTED"
+    });
+  }
+  var data;
+  if (path.indexOf("/api/records") === 0) {
+    data = { rows: rows, total: total };
+  } else if (path.indexOf("/api/histogram") === 0) {
+    data = { histogram: { series: histSeries, axis: { unit: "delay_raw", note: "ns = raw × 10（假设）" } } };
+  } else if (path === "/api/activity") {
+    data = {
+      available: true, n_calls: 1287, n_running: 2,
+      tool_counts: [
+        { tool: "fi.scan", count: 642 }, { tool: "fi.arm", count: 318 },
+        { tool: "fi.read_reply", count: 204 }, { tool: "fi.reset", count: 81 },
+        { tool: "fi.probe", count: 42 }
+      ],
+      running: [
+        { tool: "fi.scan", args_preview: "delay=560 pulse=10", started_iso: "—" },
+        { tool: "fi.read_reply", args_preview: "addr=0x21000000", started_iso: "—" }
+      ],
+      recent: rows.slice(0, 8).map(function (r, idx) {
+        return {
+          tool: "fi.scan", status: idx === 0 ? "running" : (Math.random() > 0.9 ? "fail" : "ok"),
+          args_preview: "delay=" + r.delay + " pulse=" + r.pulse + " state=" + r.state,
+          started_iso: "—", duration_s: Math.round((0.2 + Math.random() * 2.4) * 100) / 100
+        };
+      }),
+      messages: "演示数据", sessions: "—"
+    };
+  } else if (path === "/api/contracts") {
+    data = {
+      contract_version: "unconfirmed-v0.1", schema_version_constant: "未知（后端未连接）",
+      state_label_semantics: "语义未确认：FL/HANG/SUCCESS/UNEXPECTED/Fake_Success 的判定来源未证实",
+      schemas: ["record.v1", "histogram.v1", "activity.v1"],
+      warnings: ["后端未连接：以下为离线演示占位", "ns 换算（raw×10）未证实"],
+      recent_versions: [{ version: "unconfirmed-v0.1", note: "演示占位" }]
+    };
+  } else {
+    data = { states: {}, total: 0, meta: { run_config: "演示", assumptions: ["ns = raw × 10（假设）"] } };
+  }
+  data.generated_utc = new Date().toISOString();
+  data.data_source = "demo";
+  var summary = { states: states, total: total, meta: { run_config: "演示（离线样例）", assumptions: ["ns = raw × 10（假设）"] }, histogram: { series: histSeries, axis: { unit: "delay_raw" } }, contract: { version: "unconfirmed-v0.1" } };
+  data = path === "/api/summary" ? summary : data;
+  demoCache[path] = data;
+  return data;
+}
+
+/* ---------- ?demo=1 预览模式：每 ~800ms 产生一条新记录 ----------
+ * 首次请求 /api/records 返回静态首屏（与 fallback 数据一致），
+ * 之后每次请求把一条新记录（row_index 递增）插到 rows 最前——
+ * 与真实后端"最新在前"契约同形，loadRecords → mergeRecords 增量路径
+ * 与真实模式完全一致。横幅常驻：演示数据绝不冒充实测数据。 */
+var demoNextIndex = 9549;   /* 与首屏 demo 行（9548 起）衔接，持续递增 */
+var demoFirstRecordsCall = true;
+/* ---------- demo 直方图（与 /api/histogram 契约同形） ----------
+ * ?demo=1 下右栏三张 delay 分布图与左栏日志流联动演化：
+ * 每条 demo 记录的 delay 落入对应状态的直方图桶（count+1、total+1），
+ * loadHistogram 在 demo 模式改用本对象渲染，代码路径与真实模式一致。
+ * 演示计数为合成基线（页底橙横幅已声明"演示数据"，不冒充实测）。 */
+var DEMO_DELAY_MIN = 3130, DEMO_DELAY_MAX = 3190; /* 与真实数据 delay 量级对齐 */
+var DEMO_HIST_TOTALS = { FL: 358000, HANG: 86200, SUCCESS: 4630, UNEXPECTED: 2830, Fake_Success: 6 };
+var DEMO_STATE_WEIGHTS = [
+  /* 与真实数据各状态占比量级对齐：FL ≫ HANG ≫ SUCCESS ≫ UNEXPECTED ≫ Fake_Success */
+  { st: "FL", w: 0.72 }, { st: "HANG", w: 0.173 }, { st: "SUCCESS", w: 0.0928 },
+  { st: "UNEXPECTED", w: 0.0567 }, { st: "Fake_Success", w: 0.00012 }
+];
+var demoHist = null;
+/* 钟形基线 + 随机微扰：delay 3130–3190 共 61 桶，先按 Σbell 归一化再分配
+ * 目标总量，使各状态 total 落在真实量级（FL≈数十万 / SUCCESS≈4.6千 / …） */
+function demoHistData() {
+  if (demoHist) return demoHist;
+  var series = STATES.map(function (st) {
+    var target = DEMO_HIST_TOTALS[st];
+    var peak = DEMO_DELAY_MIN + Math.floor(Math.random() * 10) + 20; /* 3150–3159 峰位 */
+    var sigma = (DEMO_DELAY_MAX - DEMO_DELAY_MIN) / 2 / 2.6;
+    var raws = [], bells = [], bellSum = 0;
+    for (var raw = DEMO_DELAY_MIN; raw <= DEMO_DELAY_MAX; raw += 1) {
+      var bell = Math.exp(-Math.pow(raw - peak, 2) / (2 * sigma * sigma));
+      raws.push(raw); bells.push(bell); bellSum += bell;
+    }
+    var points = [], total = 0;
+    for (var i = 0; i < raws.length; i += 1) {
+      var count = Math.round(target * (bells[i] / bellSum) * (0.88 + Math.random() * 0.24));
+      if (count > 0) { points.push({ delay_raw: raws[i], count: count }); total += count; }
+    }
+    /* target 极小（如 Fake_Success=6）时各桶舍入为 0 → 退化为单峰桶 */
+    if (total === 0) {
+      points.push({ delay_raw: peak, count: target > 0 ? target : 1 });
+      total = points[0].count;
+    }
+    return { state: st, total: total, points: points };
+  });
+  demoHist = {
+    histogram: { series: series, axis: { unit: "delay_raw", note: "ns = raw × 10（假设）" } },
+    unit_assumption: "ns = raw × 10（假设）",
+    generated_utc: new Date().toISOString(),
+    data_source: "demo"
+  };
+  return demoHist;
+}
+/* 一条 demo 记录落入对应状态对应桶：count+1、total+1（与真实累计方向一致） */
+function demoHistBump(state, delay) {
+  var data = demoHistData();
+  var series = data.histogram.series;
+  for (var i = 0; i < series.length; i += 1) {
+    var s = series[i];
+    if (s.state !== state) continue;
+    for (var j = 0; j < s.points.length; j += 1) {
+      if (s.points[j].delay_raw === delay) {
+        s.points[j].count += 1;
+        s.total += 1;
+        return;
+      }
+    }
+    /* 基线未覆盖的桶（理论上不出现，防御式补桶） */
+    s.points.push({ delay_raw: delay, count: 1 });
+    s.points.sort(function (a, b) { return a.delay_raw - b.delay_raw; });
+    s.total += 1;
+    return;
+  }
+}
+/* 按真实占比权重抽一个状态（demo 日志流与直方图共用此分布） */
+function demoPickState() {
+  var r = Math.random(), acc = 0;
+  for (var i = 0; i < DEMO_STATE_WEIGHTS.length; i += 1) {
+    acc += DEMO_STATE_WEIGHTS[i].w;
+    if (r < acc) return DEMO_STATE_WEIGHTS[i].st;
+  }
+  return "FL";
+}
+function demoNewRecord(rowIndex) {
+  var st = demoPickState();
+  /* pulse：真实数据恒为 2，历史有 2 行 pulse=6，低概率复现 */
+  var pulse = Math.random() < 0.002 ? 6 : 2;
+  return {
+    row_index: rowIndex,
+    state: st,
+    delay: DEMO_DELAY_MIN + Math.floor(Math.random() * (DEMO_DELAY_MAX - DEMO_DELAY_MIN + 1)),
+    pulse: pulse,
+    response: st === "HANG" ? "未知" : "0x" + (Math.floor(Math.random() * 65536)).toString(16).padStart(4, "0"),
+    glitched: Math.random() > 0.5,
+    unexpected: st === "UNEXPECTED"
+  };
+}
+function demoRecordsData() {
+  var base = demoData("/api/records");
+  if (demoFirstRecordsCall) {
+    demoFirstRecordsCall = false;
+    return base;
+  }
+  var row = demoNewRecord(demoNextIndex);
+  demoNextIndex += 1;
+  demoHistBump(row.state, row.delay); /* 与左栏日志流联动：同步累进直方图 */
+  var rows = [row].concat(base.rows);
+  return {
+    rows: rows,
+    total: base.total + (demoNextIndex - 9549),
+    generated_utc: new Date().toISOString(),
+    data_source: "demo"
+  };
+}
+var demoTickSeq = 0; /* 分布图每 2 拍刷一次（肉眼可见且不抢左栏戏） */
+function startDemoMode() {
+  return setInterval(function () {
+    demoTickSeq += 1;
+    loadRecords(true);
+    if (demoTickSeq % 2 === 0) loadHistogram();
+  }, DEMO_TICK_MS);
+}
+
+/* ---------- 顶栏 ---------- */
+var refreshBtn = el("btn-refresh");
+function setClock() {
+  var d = new Date();
+  var p = function (x) { return String(x).padStart(2, "0"); };
+  el("clock").textContent = d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+    " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+setInterval(setClock, 1000); setClock();
+
+/* ---------- 状态汇总表（state | count，复用 ViewViewView buildCountsTable 结构） ---------- */
+var countsBody = null;
+var countsNumHeader = null;   /* count 列表头，供 syncNumColumns 钉宽 */
+var countsStateCells = {};
+function buildCountsTable() {
+  var table = document.createElement("table");
+  table.className = "counts-table";
+  var thead = document.createElement("thead");
+  var trh = document.createElement("tr");
+  var thState = document.createElement("th");
+  thState.textContent = "state";
+  var thCount = document.createElement("th");
+  thCount.className = "num";
+  thCount.textContent = "count";
+  trh.appendChild(thState); trh.appendChild(thCount);
+  thead.appendChild(trh);
+  table.appendChild(thead);
+  var tbody = document.createElement("tbody");
+  STATES.forEach(function (st) {
+    var tr = document.createElement("tr");
+    var tdState = document.createElement("td");
+    tdState.textContent = st;   /* 状态标签按原始字面量 */
+    var tdCount = document.createElement("td");
+    tdCount.className = "num";
+    tdCount.textContent = "未知";   /* 缺数据不冒充 0 */
+    tr.appendChild(tdState); tr.appendChild(tdCount);
+    tbody.appendChild(tr);
+    countsStateCells[st] = tdCount;
+  });
+  table.appendChild(tbody);
+  el("states").appendChild(table);
+  countsBody = tbody;
+  countsNumHeader = thCount;
+}
+
+/* ---------- count ↔ delay·raw 二列对齐（states 汇总表 × 明细表） ----------
+   两表均 width:max-content（VVV 紧凑渲染）：第一列（state）两表内容/字体/
+   padding 完全相同 → 天然等宽；第二列均为右对齐数字列但内容宽度不同
+   （count 为 4-6 位计数、delay·raw 为 3-6 位数值且表头更宽），需主动同步。
+   做法：先清两列表头的钉宽，读各自实际列宽取最大值，再同时钉到两个表头
+   （table-layout:auto 下 th 指定宽即该列首选宽）→ 两列起点与右缘逐像素对齐。
+   清宽→测宽→钉宽在同一 JS 任务内完成，中间无绘制、无闪烁。
+   resize 与字号/字体回退等布局变化：防抖 120ms 重算；监听在顶层注册一次，
+   不随轮询反复挂载（页面级生命周期，无需手动移除）。 */
+function syncNumColumns() {
+  var detailNumHeader = document.querySelector("#rec-table thead th:nth-child(2)");
+  if (!countsNumHeader || !detailNumHeader) return;
+  countsNumHeader.style.width = "";
+  detailNumHeader.style.width = "";
+  var w = Math.max(countsNumHeader.offsetWidth, detailNumHeader.offsetWidth);
+  if (w > 0) {
+    countsNumHeader.style.width = w + "px";
+    detailNumHeader.style.width = w + "px";
+  }
+}
+var syncNumColumnsResizeTimer = null;
+window.addEventListener("resize", function () {
+  if (syncNumColumnsResizeTimer !== null) clearTimeout(syncNumColumnsResizeTimer);
+  syncNumColumnsResizeTimer = setTimeout(syncNumColumns, 120);
+});
+async function loadSummary() {
+  var d = await apiGet("/api/summary");
+  var states = (d && d.states) || {};
+  STATES.forEach(function (st) {
+    var cell = countsStateCells[st], s = states[st];
+    if (!s || typeof s.count !== "number") {
+      cell.textContent = "未知";           // 缺数据不冒充 0
+      return;
+    }
+    var text = fmtInt(s.count);
+    if (cell.textContent !== text) cell.textContent = text;
+  });
+  syncNumColumns();
+  var contract = d && d.contract && d.contract.version;
+  if (contract) {
+    var pill = el("pill-contract");
+    clearChildren(pill);
+    var lbl = document.createElement("span");
+    lbl.textContent = "契约 ";
+    var val = document.createElement("b");
+    val.textContent = toDisplayText(contract);
+    pill.appendChild(lbl);
+    pill.appendChild(val);
+  }
+}
+
+/* ---------- 左栏：实时明细（日志流：增量推入，不全量重绘） ---------- */
+var currentFilter = window.FI_CONFIG.state.initial;        /* 初始筛选收拢自 FI_CONFIG（默认 "" = 全部；?state= 可覆盖） */
+var currentLimit = window.FI_CONFIG.records.defaultLimit;  /* 初始条数收拢自 FI_CONFIG（默认 30；?limit= 可覆盖） */
+var lastRecordTotal = null;
+/* 当前 tbody 最顶行（最新一条）的 row_index；null = 尚无数据。
+   每轮轮询只 prepend row_index > lastTopRow 的行，既有 DOM 节点复用不重建。 */
+var lastTopRow = null;
+/** 构造一行日志（列序：state · delay · pulse · response · glitched · unexpected）。 */
+function buildRecordRow(r, fresh) {
+  var tr = document.createElement("tr");
+  if (fresh) tr.className = "fresh";
+  var td = function (v, num, cls) {
+    var cell = document.createElement("td");
+    cell.className = (num ? "num " : "") + (cls || "");
+    cell.textContent = v === null || v === undefined || v === "" ? "未知" : String(v);
+    return cell;
+  };
+  /* state 白字（原始字面量），无徽章底色 */
+  var tdSt = document.createElement("td");
+  tdSt.textContent = toDisplayText(r.state) || "未知";
+  tr.appendChild(tdSt);
+  /* delay/pulse 绿数字（参考图明细数值全部绿色右对齐） */
+  tr.appendChild(td(r.delay, true));
+  tr.appendChild(td(r.pulse, true));
+  /* response 淡蓝白；glitched/unexpected 弱灰 */
+  tr.appendChild(td(r.response, false));
+  tr.appendChild(td(r.glitched, false, "dim"));
+  tr.appendChild(td(r.unexpected, false, "dim"));
+  tr._rowIndex = typeof r.row_index === "number" ? r.row_index : null;
+  return tr;
+}
+/** 全量渲染：仅用于首次加载 / 筛选或条数变化（无推挤动画）。 */
+function renderRecords(rows, animateTop) {
+  var body = el("rec-body");
+  clearChildren(body);
+  rows.forEach(function (r) {
+    body.appendChild(buildRecordRow(r, animateTop && r === rows[0]));
+  });
+  lastTopRow = rows.length && typeof rows[0].row_index === "number" ? rows[0].row_index : lastTopRow;
+  if (rows.length === 0) {
+    var tr = document.createElement("tr");
+    var td = document.createElement("td");
+    td.colSpan = 6; td.className = "dim";
+    td.style.textAlign = "center";
+    td.textContent = "暂无记录";
+    tr.appendChild(td); body.appendChild(tr);
+  }
+}
+/**
+ * 增量合并：只把 row_index > lastTopRow 的新行 prepend 到顶部（带推入动画），
+ * 尾部裁剪保持窗口 ≤ currentLimit；旧行节点原样复用。
+ * 滚动保护：用户钉在顶部（scrollTop < 8px）→ 插入后保持 0（最新流持续可见）；
+ * 用户已翻看历史 → scrollTop 不变，不把人拉回顶部。
+ * @returns {number} 实际插入的新行数（便于测试）
+ */
+function mergeRecords(rows) {
+  var body = el("rec-body");
+  var freshRows = [];
+  for (var i = 0; i < rows.length; i += 1) {
+    var r = rows[i];
+    if (typeof r.row_index === "number" && (lastTopRow === null || r.row_index > lastTopRow)) {
+      freshRows.push(r);
+    }
+  }
+  if (!freshRows.length) return 0;
+  var wrap = body.parentNode;
+  var pinned = wrap.scrollTop < 8;
+  /* rows 契约为最新在前；freshRows 顺序插入使最顶行最后落位 */
+  for (var j = freshRows.length - 1; j >= 0; j -= 1) {
+    body.insertBefore(buildRecordRow(freshRows[j], true), body.firstChild);
+  }
+  lastTopRow = freshRows[0].row_index;
+  /* 尾部裁剪：保持窗口不超过 limit（仅统计带 _rowIndex 的数据行，
+     占位"暂无记录"行不参与计数，也优先被裁掉） */
+  var children = body.childNodes;
+  var dataCount = 0;
+  var i2;
+  for (i2 = 0; i2 < children.length; i2 += 1) {
+    if (children[i2]._rowIndex !== undefined) dataCount += 1;
+  }
+  while (dataCount > currentLimit) {
+    var last = body.lastChild;
+    if (!last) break;
+    if (last._rowIndex !== undefined) dataCount -= 1;
+    body.removeChild(last);
+  }
+  wrap.scrollTop = pinned ? 0 : wrap.scrollTop;
+  return freshRows.length;
+}
+async function loadRecords(animateTop) {
+  var q = "/api/records?limit=" + currentLimit + "&offset=0" + (currentFilter ? "&state=" + encodeURIComponent(currentFilter) : "");
+  var d = await apiGet(q);
+  var rows = Array.isArray(d && d.rows) ? d.rows : [];
+  var firstLoad = lastTopRow === null;
+  if (firstLoad || currentFilterChanged()) {
+    renderRecords(rows, animateTop && firstLoad);
+    markFilterSynced();
+  } else {
+    mergeRecords(rows);
+  }
+  lastRecordTotal = d && typeof d.total === "number" ? d.total : lastRecordTotal;
+  /* 底部状态行：灰字 + 绿 live（复用 ViewViewView buildFooter 文案约定） */
+  el("rec-total").textContent = "已记录 " + fmtInt(lastRecordTotal) + " 行 / 当前窗口 " + Math.min(rows.length, currentLimit) + " 行";
+  var t = new Date();
+  el("rec-updated").textContent = "更新于 " + t.toTimeString().slice(0, 8) + " · " + (currentFilter || "全部") + " · " + currentLimit + " 条";
+  syncNumColumns();
+}
+/* 筛选/条数变化 → 下一次 loadRecords 走全量路径（无推挤动画） */
+var filterSeq = 0, syncedSeq = 0;
+function currentFilterChanged() { return filterSeq !== syncedSeq; }
+function markFilterSynced() { syncedSeq = filterSeq; }
+
+/* ---------- 右栏：三张 delay 分布图 ----------
+ * 布局复用 ViewViewView .vvv-stats-layout 象限约定：
+ * 左子列上下两张（SUCCESS 上 / HANG 下），右子列一张通高（UNEXPECTED）。
+ * FL 与 Fake_Success 不画图（参考图约定），仅汇总表计数 + 折叠区说明。 */
+var histHandles = {};
+function buildHistPanes() {
+  var grid = el("hist-grid");
+  var stack = document.createElement("div");
+  stack.className = "charts-col";
+  HIST_STACKED.forEach(function (st) {
+    var block = document.createElement("div");
+    block.className = "chart-block";
+    var chart = buildStatChart(st + " 分布", st, HIST_BARS, HIST_FILL[st], FI_STAT_PLOT_PX);
+    block.appendChild(chart.head);
+    block.appendChild(chart.chart);
+    var note = document.createElement("div");
+    note.className = "axis-note";
+    note.textContent = "raw × 10 = ns（假设）· 桶宽 " + HIST_BIN_RAW + " raw · 区间含左不含右";
+    block.appendChild(note);
+    stack.appendChild(block);
+    attachStatsHoverTag(block);
+    histHandles[st] = chart;
+  });
+  grid.appendChild(stack);
+  var tallBlock = document.createElement("div");
+  tallBlock.className = "chart-block tall";
+  var tallChart = buildStatChart(HIST_TALL + " 分布", HIST_TALL, HIST_BARS, HIST_FILL[HIST_TALL], FI_STAT_PLOT_TALL_PX);
+  tallBlock.appendChild(tallChart.head);
+  tallBlock.appendChild(tallChart.chart);
+  var tallNote = document.createElement("div");
+  tallNote.className = "axis-note";
+  tallNote.textContent = "raw × 10 = ns（假设）· 桶宽 " + HIST_BIN_RAW + " raw · 区间含左不含右";
+  tallBlock.appendChild(tallNote);
+  grid.appendChild(tallBlock);
+  attachStatsHoverTag(tallBlock);
+  histHandles[HIST_TALL] = tallChart;
+}
+/* ---------- 展示区间桶：逐 raw 计数 → [lo, lo+5) ----------
+ * 真实接口与 demo 生成器均为逐 raw 计数（桶宽 1，接口无桶边界字段），按直方图惯例
+ * 聚合成 HIST_BIN_RAW 宽展示桶：计数为区间内原生桶求和（无伪造、无 ns 换算，
+ * A1 假设标注纪律）；lo 对齐 5 的倍数 → 标签形如 3135-3140（含左不含右）。 */
+var HIST_BIN_RAW = window.FI_CONFIG.hist.binWidth; /* 桶宽收拢自 FI_CONFIG（默认 5；?bin= 1–100 可覆盖） */
+/** 逐 raw 计数点 → HIST_BIN_RAW 宽区间桶（计数求和、按 lo 升序）。 */
+function binDelayEntries(entries) {
+  var clean = [];
+  for (var i = 0; i < entries.length; i += 1) {
+    var e = entries[i];
+    if (e && typeof e.delay_raw === "number" && Number.isFinite(e.delay_raw) &&
+        typeof e.count === "number" && Number.isFinite(e.count)) clean.push(e);
+  }
+  if (clean.length === 0) return [];
+  clean.sort(function (a, b) { return a.delay_raw - b.delay_raw; });
+  var base = Math.floor(clean[0].delay_raw / HIST_BIN_RAW) * HIST_BIN_RAW;
+  var bins = [], byLo = {};
+  for (var j = 0; j < clean.length; j += 1) {
+    var lo = base + Math.floor((clean[j].delay_raw - base) / HIST_BIN_RAW) * HIST_BIN_RAW;
+    var bin = byLo[lo];
+    if (!bin) { bin = { delay_raw: lo, hi: lo + HIST_BIN_RAW, count: 0 }; byLo[lo] = bin; bins.push(bin); }
+    bin.count += clean[j].count;
+  }
+  bins.sort(function (a, b) { return a.delay_raw - b.delay_raw; });
+  return bins;
+}
+/* 最近一帧直方图数据：真实 / demo 两条路径都在 loadHistogram 顶部写入，
+ * 供 resize 防抖重算复用（不重新发请求、不重复累积 demo 计数）。 */
+var lastHistData = null;
+function renderHistogram(d) {
+  var hist = (d && d.histogram) || {};
+  var series = Array.isArray(hist.series) ? hist.series : [];
+  var byState = {};
+  series.forEach(function (s) { if (s && s.state) byState[s.state] = s; });
+  [HIST_STACKED[0], HIST_STACKED[1], HIST_TALL].forEach(function (st) {
+    var s = byState[st];
+    var entries = [];
+    if (s && Array.isArray(s.points)) {
+      s.points.forEach(function (p) {
+        if (p && typeof p.count === "number" && p.count > 0) {
+          entries.push({ delay_raw: p.delay_raw, count: p.count });
+        }
+      });
+      entries.sort(function (a, b) { return a.delay_raw - b.delay_raw; });
+      entries = binDelayEntries(entries); /* 逐 raw 计数 → 5 宽区间桶 */
+    }
+    var handle = histHandles[st];
+    if (entries.length === 0) {
+      // 缺数据：显示「未知」，不画 0 柱冒充
+      var note = handle.chart.parentNode.querySelector(".axis-note");
+      if (note && !note.dataset.unknown) {
+        note.dataset.unknown = "1";
+        note.textContent = "该状态暂无 delay 分布数据（未知）";
+      }
+      updateStatChart(handle.cols, handle.chart, [], HIST_BARS, st);
+      return;
+    }
+    updateStatChart(handle.cols, handle.chart, entries, HIST_BARS, st);
+  });
+}
+async function loadHistogram() {
+  /* demo 模式：用 demoHistData() 生成契约同形响应，渲染路径与真实模式完全一致 */
+  var d = DEMO_MODE
+    ? demoHistData()
+    : await apiGet("/api/histogram");
+  lastHistData = d;
+  renderHistogram(d);
+}
+/* resize 防抖 120ms：图高变化后用最近一帧数据重跑三图柱高/标签（测量式重算）。
+ * 监听在顶层注册一次，不随轮询累积（与 syncNumColumns 的 resize 监听同款惯例）。 */
+var histResizeTimer = null;
+window.addEventListener("resize", function () {
+  if (histResizeTimer !== null) clearTimeout(histResizeTimer);
+  histResizeTimer = setTimeout(function () {
+    histResizeTimer = null;
+    if (lastHistData) renderHistogram(lastHistData);
+  }, 120);
+});
+
+/* ---------- AI 活动面板 ---------- */
+async function loadActivity() {
+  var d = await apiGet("/api/activity");
+  var mini = el("ai-mini"), tools = el("ai-tools"), recent = el("ai-recent");
+  clearChildren(mini); clearChildren(tools);
+  var running = d && typeof d.n_running === "number" ? d.n_running : null;
+  var cards = [
+    { k: "总调用数", v: d && typeof d.n_calls === "number" ? d.n_calls : null, cls: "" },
+    { k: "运行中", v: running, cls: running && running > 0 ? "run" : "" },
+    { k: "最近失败", v: d && typeof d.n_failed === "number" ? d.n_failed : null, cls: "fail" }
+  ];
+  cards.forEach(function (c) {
+    var m = document.createElement("div");
+    m.className = "mini-card";
+    var k = document.createElement("div"); k.className = "k"; k.textContent = c.k;
+    var v = document.createElement("div"); v.className = "v " + c.cls;
+    v.textContent = c.v === null ? "未知" : fmtInt(c.v);
+    m.appendChild(k); m.appendChild(v); mini.appendChild(m);
+  });
+  var counts = (d && d.tool_counts) || [];
+  var top = counts.slice(0, 5);
+  var maxCount = top.length ? Math.max.apply(null, top.map(function (t) { return t.count; })) : 0;
+  top.forEach(function (t) {
+    var row = document.createElement("div"); row.className = "trow";
+    var n = document.createElement("span"); n.className = "tn"; n.textContent = toDisplayText(t.tool);
+    var b = document.createElement("span"); b.className = "tb";
+    var i = document.createElement("i");
+    i.style.width = (maxCount ? Math.max(t.count / maxCount * 100, 2) : 0) + "%";
+    b.appendChild(i);
+    var c = document.createElement("span"); c.className = "tc"; c.textContent = toCount(t.count, "—");
+    row.appendChild(n); row.appendChild(b); row.appendChild(c); tools.appendChild(row);
+  });
+  if (!top.length) {
+    var nn = document.createElement("div"); nn.className = "footer-note"; nn.textContent = "未知";
+    tools.appendChild(nn);
+  }
+  clearChildren(recent);
+  var recents = (d && d.recent) || [];
+  recents.slice(0, 10).forEach(function (r) {
+    var row = document.createElement("div");
+    var status = toDisplayText(r.status).toLowerCase();
+    row.className = "rc " + (status === "running" ? "running" : status === "fail" || status === "error" ? "fail" : "ok");
+    var dot = document.createElement("span"); dot.className = "dot";
+    var tool = document.createElement("span"); tool.className = "tool"; tool.textContent = toDisplayText(r.tool);
+    var args = document.createElement("span"); args.className = "args";
+    args.textContent = toDisplayText(r.args_preview) || "未知";
+    args.title = args.textContent;
+    var dur = document.createElement("span"); dur.className = "dur";
+    dur.textContent = typeof r.duration_s === "number" ? r.duration_s.toFixed(2) + "s" : "未知";
+    row.appendChild(dot); row.appendChild(tool); row.appendChild(args); row.appendChild(dur);
+    recent.appendChild(row);
+  });
+  if (!recents.length) {
+    var nr = document.createElement("div"); nr.className = "footer-note"; nr.textContent = "未知";
+    recent.appendChild(nr);
+  }
+}
+
+/* ---------- 契约区 ---------- */
+async function loadContracts() {
+  var d = await apiGet("/api/contracts");
+  el("ct-version").textContent = toDisplayText(d && d.contract_version) || "未知";
+  el("ct-schema").textContent = toDisplayText(d && d.schema_version_constant) || "未知";
+  el("ct-semantics").textContent = toDisplayText(d && d.state_label_semantics) || "未知";
+  var schemas = el("ct-schemas");
+  clearChildren(schemas);
+  var arr = (d && d.schemas) || [];
+  if (!arr.length) {
+    var unk = document.createElement("span"); unk.className = "footer-note"; unk.textContent = "未知";
+    schemas.appendChild(unk);
+  }
+  arr.forEach(function (s) {
+    var code = document.createElement("code"); code.textContent = toDisplayText(s);
+    schemas.appendChild(code);
+  });
+  var warns = el("ct-warnings");
+  clearChildren(warns);
+  var warr = (d && d.warnings) || [];
+  if (!warr.length) {
+    var none = document.createElement("span"); none.className = "none"; none.textContent = "无告警";
+    warns.appendChild(none);
+  }
+  warr.forEach(function (w) {
+    var div = document.createElement("div"); div.className = "w"; div.textContent = toDisplayText(w);
+    warns.appendChild(div);
+  });
+  var vers = el("ct-versions");
+  clearChildren(vers);
+  var varr = (d && d.recent_versions) || [];
+  if (!varr.length) {
+    var nv = document.createElement("span"); nv.className = "footer-note"; nv.textContent = "未知";
+    vers.appendChild(nv);
+  }
+  varr.forEach(function (v) {
+    var div = document.createElement("div"); div.className = "vr";
+    div.textContent = toDisplayText(v && v.version) + (v && v.note ? " · " + toDisplayText(v.note) : "");
+    vers.appendChild(div);
+  });
+}
+
+/* ---------- 刷新编排 ---------- */
+var spinning = false;
+async function refreshAll() {
+  if (spinning) return;
+  spinning = true;
+  refreshBtn.classList.add("spin");
+  var jobs = [
+    loadSummary(),
+    loadRecords(true),
+    DEMO_MODE ? demoHistData() && loadHistogram() : loadHistogram(),
+    DEMO_MODE ? Promise.resolve() : loadActivity(),
+    DEMO_MODE ? Promise.resolve() : loadContracts()
+  ];
+  try { await Promise.allSettled(jobs); } finally {
+    spinning = false;
+    refreshBtn.classList.remove("spin");
+  }
+}
+
+buildCountsTable();
+buildHistPanes();
+
+/* 自描述：boot 完成后打印一次生效配置快照（文件值 + URL 覆盖后的终值），仅一次 */
+var effectiveConfigLogged = false;
+function logEffectiveConfig() {
+  if (effectiveConfigLogged) return;
+  effectiveConfigLogged = true;
+  console.info("[FI] effective config", fiConfigSnapshot(window.FI_CONFIG));
+}
+
+var demoTimer = null;
+if (DEMO_MODE) {
+  /* ?demo=1：不启动后端轮询；左栏每 800ms 推一条演示记录，
+     右栏分布图每 2 拍用演化后的 demo 直方图重渲染（同一数据源联动） */
+  showDemoBanner();
+  DEMO_ON = true;
+  refreshAll().then(logEffectiveConfig);
+  demoTimer = startDemoMode();
+} else {
+  refreshAll().then(logEffectiveConfig);
+  setInterval(function () { loadRecords(true); }, REFRESH_RECORDS_MS);
+  setInterval(loadActivity, REFRESH_ACTIVITY_MS);
+  setInterval(loadHistogram, REFRESH_HIST_MS);
+}
+
+refreshBtn.addEventListener("click", refreshAll);
+
+/* document.hidden 期间跳过轮询，避免空转堆积 */
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden) refreshAll();
+});
+</script>
+</body>
+</html>

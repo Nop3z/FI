@@ -1,0 +1,146 @@
+<!--
+  微信公众号文章模板（ViewViewView / FaultViz 对标文章）
+  用法：用浏览器打开本文件 -> Ctrl+A 全选 -> Ctrl+C -> 粘贴进公众号编辑器。
+  所有样式均为内联 style，微信编辑器不会剥离；请勿引入 <style>/class/外部字体/JS。
+  代码框：深色 + 红黄绿窗口按钮 + 行号 + 微圆角(14px)，画风参考图一。
+-->
+<meta charset="utf-8">
+
+<!-- ========== 文章头 ========== -->
+<section style="font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC','Helvetica Neue','Microsoft YaHei',sans-serif;color:#1d1d1f;line-height:1.75;font-size:16px;">
+
+  <section style="margin:0 0 28px 0;">
+    <section style="font-size:13px;letter-spacing:0.12em;color:#0071e3;font-weight:600;text-transform:uppercase;margin:0 0 14px 0;">OPEN SOURCE · FAULT INJECTION</section>
+    <section style="font-size:32px;line-height:1.25;font-weight:700;color:#1d1d1f;letter-spacing:-0.01em;margin:0 0 16px 0;">文章主标题写在这里</section>
+    <section style="font-size:17px;line-height:1.7;color:#86868b;font-weight:400;margin:0 0 20px 0;">一句话副标题：说明这篇文章讲了什么、给谁看。</section>
+    <section style="border-top:1px solid #e5e5ea;margin:0;padding:14px 0 0 0;font-size:13px;color:#86868b;">
+      <span style="color:#1d1d1f;font-weight:600;">作者名</span>
+      <span style="color:#d2d2d7;margin:0 8px 0 8px;">|</span>
+      2026-10-21
+      <span style="color:#d2d2d7;margin:0 8px 0 8px;">|</span>
+      预计阅读 8 分钟
+    </section>
+  </section>
+
+  <!-- ========== 导语卡片 ========== -->
+  <section style="background:#f5f5f7;border-radius:16px;padding:22px 24px;margin:0 0 32px 0;">
+    <section style="font-size:15px;line-height:1.8;color:#4a4a4f;margin:0;">
+      导语：两三句话交代背景。我在用 FaultViz 做故障注入实验时遇到了问题，于是让 AI 一起重写了一个更轻量的版本 ViewViewView——<strong style="color:#1d1d1f;font-weight:600;">零 JVM、CSV 格式与 FaultViz 完全兼容</strong>，老脚本改一行 import 即可切换。
+    </section>
+  </section>
+
+  <!-- ========== 章节标题模板 01 ========== -->
+  <section style="margin:44px 0 18px 0;">
+    <section style="font-size:13px;color:#86868b;font-weight:600;letter-spacing:0.08em;margin:0 0 8px 0;">01 / 背景</section>
+    <section style="font-size:24px;line-height:1.35;font-weight:700;color:#1d1d1f;margin:0;">为什么重写</section>
+  </section>
+
+  <!-- ========== 正文段落模板 ========== -->
+  <section style="font-size:16px;line-height:1.8;color:#1d1d1f;margin:0 0 20px 0;">
+    段落正文。行内代码用灰底圆角标签：<span style="background:#f5f5f7;border-radius:6px;padding:2px 8px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:14px;color:#1d1d1f;">import viewviewview as faultviz</span> 这样的形式。链接用系统蓝：<a href="https://github.com/Nop3z/ViewViewView" style="color:#0071e3;text-decoration:none;">GitHub 仓库地址</a>。
+  </section>
+
+  <!-- ========== 数据亮点卡片（三个大数字） ========== -->
+  <section style="margin:28px 0;">
+    <table style="width:100%;border-collapse:separate;border-spacing:8px 0;table-layout:fixed;">
+      <tr>
+        <td style="background:#f5f5f7;border-radius:16px;padding:20px 8px;text-align:center;width:33%;">
+          <section style="font-size:30px;font-weight:700;color:#1d1d1f;line-height:1.2;margin:0 0 6px 0;">0.23s</section>
+          <section style="font-size:13px;color:#86868b;margin:0;">10 万行 CSV 落地</section>
+        </td>
+        <td style="background:#f5f5f7;border-radius:16px;padding:20px 8px;text-align:center;width:34%;">
+          <section style="font-size:30px;font-weight:700;color:#1d1d1f;line-height:1.2;margin:0 0 6px 0;">2.2&micro;s</section>
+          <section style="font-size:13px;color:#86868b;margin:0;">p95 单行写入</section>
+        </td>
+        <td style="background:#f5f5f7;border-radius:16px;padding:20px 8px;text-align:center;width:33%;">
+          <section style="font-size:30px;font-weight:700;color:#1d1d1f;line-height:1.2;margin:0 0 6px 0;">0</section>
+          <section style="font-size:13px;color:#86868b;margin:0;">JVM / JDK 依赖</section>
+        </td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ========== 对比表格 ========== -->
+  <section style="margin:28px 0;">
+    <table style="width:100%;border-collapse:collapse;font-size:14px;line-height:1.7;">
+      <tr>
+        <th style="background:#f5f5f7;color:#86868b;font-weight:600;text-align:left;padding:12px 14px;border-bottom:1px solid #e5e5ea;width:22%;">维度</th>
+        <th style="background:#f5f5f7;color:#86868b;font-weight:600;text-align:left;padding:12px 14px;border-bottom:1px solid #e5e5ea;width:39%;">FaultViz</th>
+        <th style="background:#f5f5f7;color:#1d1d1f;font-weight:700;text-align:left;padding:12px 14px;border-bottom:1px solid #e5e5ea;width:39%;">ViewViewView</th>
+      </tr>
+      <tr>
+        <td style="color:#86868b;padding:12px 14px;border-bottom:1px solid #e5e5ea;">运行时</td>
+        <td style="color:#1d1d1f;padding:12px 14px;border-bottom:1px solid #e5e5ea;">Deephaven &times; JDK，需配 JAVA_HOME</td>
+        <td style="color:#1d1d1f;font-weight:600;padding:12px 14px;border-bottom:1px solid #e5e5ea;">纯 Python，零 JVM</td>
+      </tr>
+      <tr>
+        <td style="color:#86868b;padding:12px 14px;border-bottom:1px solid #e5e5ea;">内存</td>
+        <td style="color:#1d1d1f;padding:12px 14px;border-bottom:1px solid #e5e5ea;">默认 JVM 堆 2 GB</td>
+        <td style="color:#1d1d1f;font-weight:600;padding:12px 14px;border-bottom:1px solid #e5e5ea;">环形窗口，约 0.3 MB</td>
+      </tr>
+      <tr>
+        <td style="color:#86868b;padding:12px 14px;border-bottom:1px solid #e5e5ea;">数据通路</td>
+        <td style="color:#1d1d1f;padding:12px 14px;border-bottom:1px solid #e5e5ea;">Python &rarr; Deephaven &rarr; JupyterLab &rarr; 浏览器</td>
+        <td style="color:#1d1d1f;font-weight:600;padding:12px 14px;border-bottom:1px solid #e5e5ea;">CSV-first + 50ms 合帧本地推送</td>
+      </tr>
+      <tr>
+        <td style="color:#86868b;padding:12px 14px;">兼容性</td>
+        <td style="color:#1d1d1f;padding:12px 14px;">原版</td>
+        <td style="color:#1d1d1f;font-weight:600;padding:12px 14px;">API + CSV 兼容，改一行 import</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ========== 代码框：深色 + 红黄绿按钮 + 行号 + 微圆角 ========== -->
+  <section style="background:#1c1c1e;border-radius:14px;margin:26px 0;overflow:hidden;">
+    <section style="padding:16px 18px 4px 18px;">
+      <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#ff5f57;margin-right:8px;"></span>
+      <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#febc2e;margin-right:8px;"></span>
+      <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#28c840;"></span>
+      <span style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;color:#6e6e73;margin-left:8px;">quickstart.py</span>
+    </section>
+    <table style="width:100%;border-collapse:collapse;font-family:'SF Mono',Menlo,Consolas,'Courier New',monospace;font-size:13px;line-height:1.75;">
+      <tr>
+        <td style="width:44px;vertical-align:top;color:#6e6e73;text-align:right;padding:8px 6px 20px 18px;user-select:none;">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9</td>
+        <td style="vertical-align:top;color:#e8e8ed;padding:8px 18px 20px 6px;white-space:pre-wrap;word-break:break-all;"><span style="color:#ff7ab2;">import</span> viewviewview <span style="color:#ff7ab2;">as</span> faultviz
+
+vt = faultviz.<span style="color:#7dcfff;">ViewWidget</span>(
+    live_rows=<span style="color:#ff9f0a;">1000</span>,
+    columns={<span style="color:#7ed6a1;">"state"</span>: str, <span style="color:#7ed6a1;">"delay"</span>: int, <span style="color:#7ed6a1;">"errcode"</span>: str},
+)
+vt.<span style="color:#7dcfff;">update</span>(state=<span style="color:#7ed6a1;">"PASS"</span>, delay=<span style="color:#ff9f0a;">1200</span>, errcode=<span style="color:#7ed6a1;">"0x1A"</span>)</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ========== 引用 / 提示块 ========== -->
+  <section style="border-left:3px solid #0071e3;background:#f5f5f7;border-radius:0 14px 14px 0;padding:16px 20px;margin:26px 0;">
+    <section style="font-size:15px;line-height:1.8;color:#4a4a4f;margin:0;">
+      提示或引用。适合放“老脚本如何迁移”“注意事项”这类补充信息。
+    </section>
+  </section>
+
+  <!-- ========== 有序列表 ========== -->
+  <section style="margin:0 0 20px 0;padding:0;">
+    <section style="font-size:16px;line-height:1.8;color:#1d1d1f;margin:0 0 12px 0;padding-left:28px;text-indent:-28px;"><span style="display:inline-block;width:20px;height:20px;line-height:20px;background:#1d1d1f;color:#fff;border-radius:50%;font-size:12px;text-align:center;margin-right:8px;vertical-align:2px;">1</span>列表项第一项。</section>
+    <section style="font-size:16px;line-height:1.8;color:#1d1d1f;margin:0 0 12px 0;padding-left:28px;text-indent:-28px;"><span style="display:inline-block;width:20px;height:20px;line-height:20px;background:#1d1d1f;color:#fff;border-radius:50%;font-size:12px;text-align:center;margin-right:8px;vertical-align:2px;">2</span>列表项第二项。</section>
+    <section style="font-size:16px;line-height:1.8;color:#1d1d1f;margin:0 0 12px 0;padding-left:28px;text-indent:-28px;"><span style="display:inline-block;width:20px;height:20px;line-height:20px;background:#1d1d1f;color:#fff;border-radius:50%;font-size:12px;text-align:center;margin-right:8px;vertical-align:2px;">3</span>列表项第三项。</section>
+  </section>
+
+  <!-- ========== 结尾 ========== -->
+  <section style="border-top:1px solid #e5e5ea;margin:44px 0 24px 0;padding-top:28px;">
+    <section style="font-size:16px;line-height:1.8;color:#1d1d1f;margin:0 0 20px 0;">
+      结语段落：两三句话总结，附上传播钩子（项目地址、欢迎 star / issue）。
+    </section>
+    <section style="background:#1d1d1f;border-radius:16px;padding:22px 24px;margin:0 0 20px 0;">
+      <section style="font-size:13px;color:#86868b;letter-spacing:0.08em;margin:0 0 10px 0;">GITHUB</section>
+      <section style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:14px;color:#f5f5f7;margin:0;word-break:break-all;">https://github.com/Nop3z/ViewViewView</section>
+      <section style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:14px;color:#86868b;margin:8px 0 0 0;word-break:break-all;">https://gitee.com/osr-tech/faultviz</section>
+    </section>
+    <section style="font-size:13px;color:#86868b;line-height:1.7;margin:0;">
+      原创声明 · 转载请注明出处<br>
+      ViewViewView 采用木兰宽松许可证第 2 版（MulanPSL-2.0），与 FaultViz 同协议。
+    </section>
+  </section>
+
+</section>

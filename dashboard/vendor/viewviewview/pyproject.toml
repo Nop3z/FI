@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "viewviewview"
+version = "0.6.0"
+description = "Lightweight, freeze-proof fault-injection results viewer with a FaultViz-compatible API"
+readme = "README.md"
+license = "MulanPSL-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+keywords = [
+    "fault-injection",
+    "hardware-security",
+    "jupyterlab",
+    "visualization",
+    "csv",
+    "faultviz",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Jupyter",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Mulan Permissive Software License v2 (MulanPSL-2.0)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "anywidget>=0.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/Nop3z/ViewViewView"
+Repository = "https://github.com/Nop3z/ViewViewView"
+Issues = "https://github.com/Nop3z/ViewViewView/issues"
+
+[project.optional-dependencies]
+plot = [
+    "pygwalker",
+    "pandas",
+]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/viewviewview"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/viewviewview",
+    "/scripts",
+    "/docs",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "SIM"]
+ignore = [
+    # The CSV handle intentionally lives on the widget instance.
+    "SIM115",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The demo builder embeds long HTML/JS template lines on purpose.
+"scripts/build_demo.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

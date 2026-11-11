@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ViewViewView · 效果图</title>
+<style>
+  body { background:#0e1216; color:#e6ebf1; font-family:system-ui,"Segoe UI","Microsoft YaHei",sans-serif; margin:0; padding:22px 28px 34px; }
+  h1 { font-size:19px; margin:0 0 6px; }
+  p.lead { color:#9aa4b2; font-size:12px; margin:0 0 18px; }
+  .shot { margin:0 0 20px; }
+  .shot img { width:1000px; display:block; border:1px solid #333b45; border-radius:8px; }
+  .cap { color:#9aa4b2; font-size:12px; margin:6px 0 0; }
+</style>
+</head>
+<body>
+  <h1>ViewViewView · 实测效果</h1>
+  <p class="lead">真实 Python 核心产出的载荷（5,000 次模拟注入），经 bundled 前端渲染；列宽图为合成拖拽后的效果。</p>
+  <div class="shot"><img src="demo-empty.png" alt="empty"><p class="cap">① 实例化 columns=... 后 vt.show()：5 列空表骨架，尚未注入</p></div>
+  <div class="shot"><img src="demo-live.png" alt="live"><p class="cap">② 真实运行结果：上窗分类计数（绿色 #19ff25）、下窗最新 1000 行明细（live_rows 窗口）、底部总数与 live 状态</p></div>
+  <div class="shot"><img src="demo-resize.png" alt="resize"><p class="cap">③ 拖动表头分隔线：state 列收窄、delay 列加宽（宽度在实时刷新间保持）</p></div>
+</body>
+</html>

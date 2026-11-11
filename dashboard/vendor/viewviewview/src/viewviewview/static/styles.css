@@ -1,0 +1,407 @@
+/*
+ * ViewViewView dual-pane widget styles — ARCHITECTURE.md §4.4.
+ *
+ * Palette tokens are declared on `.vvv-root` rather than `:host`: anywidget
+ * may inject this stylesheet into the light DOM (ipywidgets fallback) where
+ * `:host` never matches. `.vvv-root` exists in both rendering modes, so the
+ * dark palette and the white field text / green count text are identical in
+ * JupyterLab, Voilà and the standalone preview page. Count color defaults to
+ * #19ff25 and can be overridden via the ``colors=`` widget argument.
+ *
+ * Palette: Deephaven dark-tone approximation — near-black surfaces, pure white
+ * field text, green count values (decisions D5/D10/D13).
+ */
+
+:host {
+  display: block;
+}
+
+.vvv-root {
+  --vvv-bg: #1c2126;
+  --vvv-panel: #232931;
+  --vvv-header: #2b323a;
+  --vvv-row-alt: #20252b;
+  --vvv-fg: #ffffff;
+  --vvv-fg-dim: #8b95a1;
+  --vvv-accent: #3d6fe0;
+  --vvv-border: #333b45;
+  --vvv-live: #2ea043;
+  --vvv-count: #19ff25;
+  --vvv-number: #19ff25;
+
+  background: var(--vvv-bg);
+  box-sizing: border-box;
+  color: var(--vvv-fg);
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  gap: 10px;
+  height: 100%;
+  line-height: 1.45;
+  max-height: 640px;
+  min-height: 320px;
+  padding: 10px 12px;
+  scrollbar-color: var(--vvv-border) transparent;
+  scrollbar-width: thin;
+}
+
+.vvv-pane {
+  background: var(--vvv-panel);
+  border: 1px solid var(--vvv-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.vvv-pane--counts {
+  flex: 0 0 auto;
+  max-height: 150px;
+}
+
+/* min-height:0 lets the inner table scroll inside the flexible pane. */
+.vvv-pane--detail {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---------------------------------------------------------------------
+ * Optional third pane: delay statistics, shown as a horizontal band that
+ * holds the detail pane (left) and two vertical bar charts (right). Each
+ * chart is a fixed 206px tall plot: 122px bar area (probability 0-100%,
+ * i.e. 0-122px) + 84px rotated timeline labels. Bars grow upward from the
+ * shared baseline; the x axis runs along the delay timeline ascending.
+ * --------------------------------------------------------------------- */
+.vvv-band {
+  display: flex;
+  gap: 10px;
+  min-height: 0;
+}
+
+.vvv-band > .vvv-pane--detail {
+  flex: 1 1 auto;
+  min-width: 96px;
+}
+
+/* Fixed-width charts pane; node count is constant, only texts/heights patch.
+ * The right margin keeps the charts away from the screen edge (16:9 full
+ * browsers pin the widget against the monitor border otherwise). Plain
+ * mode is one column (成功分布 / HANG分布 stacked); with stats_custom= the pane
+ * widens into a 2×2 quadrant grid and the custom chart owns the right
+ * column (spans both rows). */
+.vvv-pane--stats {
+  display: flex;
+  flex: 0 0 272px;
+  flex-direction: column;
+  gap: 5px;
+  margin-right: 32px;
+  overflow: hidden;
+  padding: 8px 10px;
+  /* Anchor for the .vvv-stats-tip hover tag. */
+  position: relative;
+}
+
+.vvv-pane--stats-custom {
+  flex: 0 0 576px;
+}
+
+/* Quadrant layout: q2 = top-left (成功分布), q3 = bottom-left (HANG分布),
+ * custom = right column spanning both rows (第一/第四象限). */
+.vvv-stats-layout {
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, auto));
+  row-gap: 6px;
+}
+
+/* Without stats_custom the grid degenerates to one stacked column. */
+.vvv-pane--stats:not(.vvv-pane--stats-custom) .vvv-stats-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.vvv-stat-block {
+  min-width: 0;
+}
+
+.vvv-stat-block--q2 {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.vvv-stat-block--q3 {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.vvv-stat-block--custom {
+  display: flex;
+  flex-direction: column;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  /* Title rides the top row (level with 成功分布), the chart anchors to the
+   * bottom row so its baseline and labels sit flush with HANG分布. */
+  justify-content: space-between;
+}
+
+/* The custom chart keeps its own doubled plot height (written inline by
+ * index.mjs, incl. its 50% gridline) so the user-defined state — often the
+ * majority across the whole timeline — gets stretched, readable bars. */
+
+.vvv-stats-title {
+  align-items: baseline;
+  color: var(--vvv-fg);
+  display: flex;
+  font-size: 12px;
+  font-weight: 600;
+  justify-content: space-between;
+}
+
+.vvv-stats-title-value {
+  color: var(--vvv-fg-dim);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+/* Plot: relative so the gridline/baseline overlays can anchor to it. */
+.vvv-stat-chart {
+  align-items: flex-end;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  height: 206px; /* STAT_PLOT_PX 122 + STAT_LABEL_PX 84 (index.mjs) */
+  min-width: 0;
+  position: relative;
+}
+
+/* 50% reference line: sits 84px (labels) + 61px (half of the 122px plot)
+ * above the chart's bottom edge; must never intercept pointer events. */
+.vvv-stat-grid {
+  border-top: 1px dashed var(--vvv-border);
+  bottom: 145px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+}
+
+/* 0% baseline: top edge of the 84px label zone; never intercepts hover. */
+.vvv-stat-baseline {
+  border-top: 1px solid var(--vvv-border);
+  bottom: 84px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+}
+
+/* One bar = [fill (grows upward)] over [rotated label]. */
+.vvv-stat-col {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.vvv-stat-fill {
+  background: var(--vvv-count);
+  border-radius: 2px 2px 0 0;
+  flex: 0 0 auto;
+  height: 0px;
+  width: 100%;
+}
+
+/* HANG分布 bars share the warning red (palette has no red token yet). */
+.vvv-stat-fill--hang {
+  background: #e05252;
+}
+
+/* User-defined stats_custom state value: user-requested #18097d, lifted to
+ * #4d33ff so the bars stay clearly visible on the dark theme. */
+.vvv-stat-fill--custom {
+  background: #4d33ff;
+}
+
+/* Timeline labels read bottom-to-top in the 84px zone under the plot. */
+.vvv-stat-lab {
+  align-items: center;
+  color: var(--vvv-fg-dim);
+  display: flex;
+  flex: 0 0 84px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.vvv-stats-note {
+  color: var(--vvv-fg-dim);
+  font-size: 10px;
+}
+
+/* Instant hover tag over a hovered bar (native title is too slow while
+ * scanning). One constant element per pane: positioned by index.mjs on
+ * mouseover, centred above the bar's top edge via the -50%/-100% shift. */
+.vvv-stats-tip {
+  background: var(--vvv-header);
+  border: 1px solid var(--vvv-border);
+  border-radius: 3px;
+  color: var(--vvv-fg);
+  display: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  left: 0;
+  padding: 3px 7px;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: translate(-50%, -100%);
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.vvv-table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  /* Compact by default: columns hug their content instead of being stretched
+     across the pane (FaultViz-like). Drag a header divider to fine-tune. */
+  width: max-content;
+  min-width: 0;
+}
+
+/* Explicit widths (after the user drags a divider) switch to fixed layout. */
+.vvv-table--fixed {
+  table-layout: fixed;
+}
+
+/* Sticky header pinned to the pane's own scrollport. */
+.vvv-th {
+  background: var(--vvv-header);
+  border-bottom: 1px solid var(--vvv-border);
+  color: var(--vvv-fg);
+  font-weight: 600;
+  padding: 6px 10px;
+  position: sticky;
+  text-align: left;
+  top: 0;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+/* Draggable divider between header cells (column width). */
+.vvv-resize {
+  background: linear-gradient(
+    to right,
+    transparent 3px,
+    var(--vvv-border) 3px,
+    var(--vvv-border) 5px,
+    transparent 5px
+  );
+  cursor: col-resize;
+  height: 100%;
+  position: absolute;
+  right: -4px;
+  top: 0;
+  touch-action: none;
+  width: 8px;
+  z-index: 2;
+}
+
+.vvv-resize:hover,
+.vvv-resize--active {
+  background: linear-gradient(
+    to right,
+    transparent 3px,
+    var(--vvv-accent) 3px,
+    var(--vvv-accent) 5px,
+    transparent 5px
+  );
+}
+
+.vvv-th--num {
+  text-align: right;
+}
+
+.vvv-td {
+  border-bottom: 1px solid var(--vvv-border);
+  color: var(--vvv-fg);
+  max-width: 480px;
+  overflow: hidden;
+  padding: 4px 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vvv-td--num {
+  text-align: right;
+}
+
+/* Count values (top pane) and numeric detail cells (delay, pulse, errcode,
+   ...) share the FaultViz positive-number green by default. Override
+   --vvv-count / --vvv-number to tint them independently. */
+.vvv-count {
+  color: var(--vvv-count);
+}
+
+.vvv-num {
+  color: var(--vvv-number);
+}
+
+/* Zebra rows; hover highlights with the header tone. */
+.vvv-table tbody tr:nth-child(even) {
+  background: var(--vvv-row-alt);
+}
+
+.vvv-table tbody tr:hover {
+  background: var(--vvv-header);
+}
+
+/* Graceful empty states ("No data recorded." / "No state column"). */
+.vvv-note {
+  color: var(--vvv-fg-dim);
+  font-size: 12px;
+  padding: 12px 14px;
+}
+
+/* Bottom-right small caption: 已记录 n 行 / 当前窗口 m 行 / live. */
+.vvv-footer {
+  align-items: center;
+  color: var(--vvv-fg-dim);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 0 2px;
+}
+
+.vvv-live {
+  align-items: center;
+  color: var(--vvv-live);
+  display: inline-flex;
+  gap: 4px;
+}
+
+.vvv-live::before {
+  background: var(--vvv-live);
+  border-radius: 50%;
+  content: "";
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+}
+
+/* While dragging a divider: signal resize + stop text selection inside the
+   widget (shadow-DOM scoped, so document-level body rules would not apply). */
+.vvv-root--resizing,
+.vvv-root--resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}

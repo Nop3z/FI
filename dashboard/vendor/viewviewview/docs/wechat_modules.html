@@ -1,0 +1,66 @@
+<!--
+  微信公众号可复用模块库 · 共 6 个模块
+  依据：微信公众平台编辑器插件开发规范（developers.weixin.qq.com/doc/service/guide/product/plugin_spec.html）
+  合规要点：无固定内容宽度、line-height 不小于字号、不用 pre 包裹文本、
+            不用 !important、text-align 不用 start/end、嵌套层级 <10、不设正文 font-family。
+
+  使用方法（一次添加，长期复用）：
+  1) 公众号后台新建一篇草稿，命名《排版模块库》，把本文件全部内容粘贴进去并保存；
+  2) 以后写文章时打开这篇草稿，复制需要的模块粘到正文；
+  3) 每个模块上方的浅灰小标签（如「— 代码模块 · 复制时跳过本行 —」）只在模板库里起定位作用，复制正文时不要带上它。
+-->
+
+<!-- ============ 模块 1/6 · 代码模块 ============ -->
+<section style="margin:16px 0 6px 0;font-size:11px;line-height:1.6;color:#b0b0b6;letter-spacing:0.06em;">— 代码模块 · 复制时跳过本行 —</section>
+<section style="margin:24px 0;background-color:#1c1c1e;border-radius:14px;overflow:hidden;">
+  <section style="padding:14px 16px 0 16px;line-height:1;">
+    <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background-color:#ff5f57;"></span>
+    <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background-color:#febc2e;margin-left:8px;"></span>
+    <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background-color:#28c840;margin-left:8px;"></span>
+    <span style="color:#8a8f98;font-size:12px;margin-left:10px;">quickstart.py</span>
+  </section>
+  <table style="width:100%;border-collapse:collapse;margin-top:6px;">
+    <tr>
+      <td style="vertical-align:top;text-align:right;padding:10px 8px 16px 16px;color:#6e6e73;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.7;user-select:none;">1<br>2<br>3<br>4<br>5<br>6<br>7</td>
+      <td style="vertical-align:top;padding:10px 16px 16px 4px;color:#e8e8ed;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.7;word-break:break-all;"><span style="color:#ff7ab2;">import</span> viewviewview <span style="color:#ff7ab2;">as</span> faultviz<br><br>vt = faultviz.<span style="color:#7dcfff;">ViewWidget</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;live_rows=<span style="color:#ff9f0a;">1000</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;columns={<span style="color:#7ed6a1;">"state"</span>: str, <span style="color:#7ed6a1;">"delay"</span>: int},<br>)<br>vt.<span style="color:#7dcfff;">update</span>(state=<span style="color:#7ed6a1;">"PASS"</span>, delay=<span style="color:#ff9f0a;">1200</span>)</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ============ 模块 2/6 · 标题模块 ============ -->
+<section style="margin:16px 0 6px 0;font-size:11px;line-height:1.6;color:#b0b0b6;letter-spacing:0.06em;">— 标题模块 · 复制时跳过本行 —</section>
+<section style="margin:36px 0 16px 0;">
+  <section style="font-size:13px;color:#0071e3;font-weight:600;letter-spacing:0.08em;margin-bottom:8px;line-height:1.6;">01 / 章节眉题</section>
+  <section style="font-size:24px;line-height:1.4;color:#1d1d1f;font-weight:700;letter-spacing:-0.01em;">章节标题写在这里</section>
+</section>
+
+<!-- ============ 模块 3/6 · 下划线分割模块 ============ -->
+<section style="margin:16px 0 6px 0;font-size:11px;line-height:1.6;color:#b0b0b6;letter-spacing:0.06em;">— 下划线分割模块 · 复制时跳过本行 —</section>
+<section style="margin:32px 0;border-bottom:1px solid #e5e5ea;line-height:1;font-size:16px;"><br></section>
+
+<!-- ============ 模块 4/6 · 竖线分割模块 ============ -->
+<section style="margin:16px 0 6px 0;font-size:11px;line-height:1.6;color:#b0b0b6;letter-spacing:0.06em;">— 竖线分割模块 · 复制时跳过本行 —</section>
+<section style="margin:24px 0;border-left:3px solid #0071e3;padding:4px 0 4px 16px;line-height:1.8;font-size:16px;color:#1d1d1f;">
+  用左侧竖线强调的引述或重点段落，适合放置结论、警示或引用原句。
+</section>
+
+<!-- ============ 模块 5/6 · 小字模块 ============ -->
+<section style="margin:16px 0 6px 0;font-size:11px;line-height:1.6;color:#b0b0b6;letter-spacing:0.06em;">— 小字模块 · 复制时跳过本行 —</section>
+<section style="margin:16px 0;font-size:13px;line-height:1.8;color:#86868b;">
+  小字模块：适用于图注、出处、补充说明、免责声明等次要信息。
+</section>
+
+<!-- ============ 模块 6/6 · 浅色字模块 ============ -->
+<section style="margin:16px 0 6px 0;font-size:11px;line-height:1.6;color:#b0b0b6;letter-spacing:0.06em;">— 浅色字模块 · 复制时跳过本行 —</section>
+<!-- data-ignore-dm：浅色是本模块的既定设计，已确认暗色模式下可读，故按官方豁免机制跳过 low-contrast 检测 -->
+<section data-ignore-dm="low-contrast" style="margin:20px 0;font-size:16px;line-height:1.8;color:#a1a1a6;">
+  浅色字模块：正文同字号但降低对比度，用于弱化背景信息、次要分支说明；配合深色字形成层次，避免整篇全黑过重。
+</section>
+
+<!--
+  颜色速查（全文统一的果味配色）：
+  正文 #1d1d1f · 次级 #86868b · 浅色 #a1a1a6 · 卡片底 #f5f5f7
+  强调蓝 #0071e3 · 分割线 #e5e5ea · 代码底 #1c1c1e
+  代码高亮：关键字 #ff7ab2 · 函数 #7dcfff · 字符串 #7ed6a1 · 数字 #ff9f0a · 注释 #8a8f98
+  粘贴后如需调间距，只改各模块的 margin 数值即可，勿加 !important。
+-->

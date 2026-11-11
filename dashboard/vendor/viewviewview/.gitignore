@@ -1,0 +1,31 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling / editor noise
+.idea/
+.vscode/
+.ipynb_checkpoints/
+
+# Runtime artifacts: widgets auto-generate viewviewview-*.csv next to the CWD,
+# so a blanket *.csv rule (plus explicit keep rules for test fixtures under
+# tests/ if the test engineer ever needs one) keeps the repo clean.
+*.csv
+!tests/**/*.csv
+
+dev/mem_harness.html
