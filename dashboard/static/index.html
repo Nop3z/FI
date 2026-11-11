@@ -352,9 +352,14 @@ details.fold[open]>summary .chev{transform:rotate(90deg)}
  *   color_unexpected  颜色   #RRGGBB                                 colors.unexpected → CSS --c-unexpected
  *   state             枚举   FL | HANG | SUCCESS | UNEXPECTED |      state.initial（初始筛选，
  *                        Fake_Success 五个字面量之一                 预置左上筛选 chip 选中态）
+ *   dataset           前缀   ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ 且     dataset.initial（渲染哪个数据集；
+ *                        不含 ".."（非法静默回落 ""）              summary/records/histogram 三个数据
+ *                                                                  接口请求带 ?dataset=<prefix>，
+ *                                                                  可选值见后端 /api/datasets 枚举）
  *
  *   示例 URL：index.html?limit=50&bin=10&color_hang=%23ff0000
  *             index.html?poll_records=1000&poll_activity=2000&state=HANG
+ *             index.html?dataset=<prefix>   （<prefix> 为 /api/datasets 枚举出的数据集前缀）
  *   ⚠ 颜色里的 “#” 在 URL 中必须转义为 %23 —— # 是 URL 锚点起始符，不转义会
  *     截断查询串，导致该参数（及其后所有参数）丢失。
  *   自检：启动完成后控制台打印一次 “[FI] effective config”（文件值 + URL 覆盖后的终值）。
@@ -387,6 +392,14 @@ window.FI_CONFIG = {
   state: {
     initial: "",  /* 初始筛选："" = 全部（默认）；仅接受 allowed 之一（URL ?state= 同规） */
     allowed: ["FL", "HANG", "SUCCESS", "UNEXPECTED", "Fake_Success"]  /* 主体 STATES 常量来源 */
+  },
+  /* —— 数据集选择（渲染哪个数据集）—— */
+  dataset: {
+    initial: ""  /* 渲染哪个数据集："" = 后端默认；?dataset=<prefix> 可按次覆盖。
+                    合法字符 ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ 且不含 ".."；
+                    非法值静默回落 ""（URL 与本字段同规，校验与后端一致）。
+                    可选值由后端 /api/datasets 枚举，本文件不预置任何数据集名。
+                    示例：index.html?dataset=<prefix> */
   }
 };
 
@@ -409,6 +422,12 @@ function fiApplyUrlOverrides(cfg) {
   n = getInt("bin", 1, 100);                 if (n !== null) cfg.hist.binWidth = n;
   var state = params.get("state");
   if (state !== null && cfg.state.allowed.indexOf(state) !== -1) cfg.state.initial = state;
+  /* dataset：与后端一致的校验（^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ 且不含 ".."）；
+     非法值静默忽略，保持 cfg.dataset.initial 默认 ""（不抛错、不空白页）。 */
+  var ds = params.get("dataset");
+  if (ds !== null && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(ds) && ds.indexOf("..") === -1) {
+    cfg.dataset.initial = ds;
+  }
   var colorMap = {
     color_success: { key: "success", cssVar: "--c-success" },
     color_hang: { key: "hang", cssVar: "--c-hang" },
@@ -439,7 +458,8 @@ function fiConfigSnapshot(cfg) {
     records: { defaultLimit: cfg.records.defaultLimit, limitChoices: cfg.records.limitChoices.slice() },
     hist: { binWidth: cfg.hist.binWidth },
     colors: { success: cfg.colors.success, hang: cfg.colors.hang, unexpected: cfg.colors.unexpected },
-    state: { initial: cfg.state.initial, allowed: cfg.state.allowed.slice() }
+    state: { initial: cfg.state.initial, allowed: cfg.state.allowed.slice() },
+    dataset: { initial: cfg.dataset.initial }
   };
 }
 
@@ -640,6 +660,19 @@ var DEMO_ON = false;
 /* ?demo=1 预览模式：不连接后端，用演示生成器驱动与真实模式相同的增量插入路径 */
 var DEMO_MODE = typeof location !== "undefined" && /[?&]demo=1/.test(location.search);
 var DEMO_TICK_MS = 800;
+/* ---------- 数据集请求参数（来自 URL/CONFIG，不写死任何数据集名） ----------
+ * datasetQuery()      → "&dataset=<encode>" 或 ""（直接拼在已有 ?… 查询串后）
+ * datasetQueryLead()  → "?dataset=<encode>" 或 ""（用于无既有查询串的路径）
+ * 三个数据接口（summary/records/histogram）接入；activity/contracts/health
+ * 契约不支持 dataset，不加。initial 为空 = 后端默认，不带参数。 */
+function datasetQuery() {
+  var v = window.FI_CONFIG.dataset.initial;
+  return typeof v === "string" && v ? "&dataset=" + encodeURIComponent(v) : "";
+}
+function datasetQueryLead() {
+  var q = datasetQuery();
+  return q ? "?" + q.slice(1) : "";
+}
 function apiGet(path) {
   if (DEMO_MODE) {
     if (!DEMO_ON) {
@@ -653,7 +686,16 @@ function apiGet(path) {
     return Promise.resolve(demoData(path));
   }
   return fetch(path, { cache: "no-store" }).then(function (res) {
-    if (!res.ok) throw new Error("HTTP " + res.status);
+    if (!res.ok) {
+      /* 增强（不改变降级链路）：错误体含 missing_reason（如数据集不合法/缺失的
+         400/404 契约）时 console.warn 一条原因，随后照旧 throw → demo 降级。 */
+      return res.json().catch(function () { return null; }).then(function (body) {
+        if (body && body.missing_reason) {
+          console.warn("[FI] 数据集不可用: " + body.missing_reason);
+        }
+        throw new Error("HTTP " + res.status);
+      });
+    }
     return res.json();
   }).catch(function (err) {
     if (!DEMO_ON) {
@@ -670,7 +712,7 @@ function showDemoBanner() {
   b.style.cssText = "position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99;" +
     "background:var(--panel);border:1px solid rgba(224,82,82,.45);border-radius:3px;" +
     "padding:8px 18px;font-size:12px;color:var(--c-hang);white-space:nowrap";
-  b.textContent = "后端未连接 · 当前为演示数据，非实测结果";
+  b.textContent = "后端未连接 · 当前为演示数据（离线样例），非实测结果";
   document.body.appendChild(b);
 }
 /** 构造与契约同形的演示数据（仅首次生成，之后稳定以观察轮询行为）。 */
@@ -717,7 +759,7 @@ function demoData(path) {
       ],
       running: [
         { tool: "fi.scan", args_preview: "delay=560 pulse=10", started_iso: "—" },
-        { tool: "fi.read_reply", args_preview: "addr=0x21000000", started_iso: "—" }
+        { tool: "fi.read_reply", args_preview: "addr=0x<BASE>", started_iso: "—" }
       ],
       recent: rows.slice(0, 8).map(function (r, idx) {
         return {
@@ -880,6 +922,36 @@ function setClock() {
 }
 setInterval(setClock, 1000); setClock();
 
+/* ---------- 数据集 pill（顶栏被动展示，只读；首次创建后复用同一节点） ---------- */
+var datasetPill = null;
+/** value 为响应顶层 dataset 字段：有值显示「数据集 <值>」；缺失（旧响应/异常）
+ *  时若 pill 已存在则回退显示「默认」，从未创建过则不凭空创建。demo 模式不显示。 */
+function updateDatasetPill(value) {
+  if (DEMO_MODE) return;                       /* demo 无后端语义：不创建、不更新 */
+  var has = typeof value === "string" && value !== "";
+  if (!datasetPill) {
+    if (!has) return;                          /* 旧后端无 dataset 字段：不显示空 pill */
+    datasetPill = document.createElement("span");
+    datasetPill.className = "pill";
+    datasetPill.id = "pill-dataset";
+    var lbl = document.createElement("span");
+    lbl.textContent = "数据集 ";
+    var val = document.createElement("b");
+    datasetPill.appendChild(lbl);
+    datasetPill.appendChild(val);
+    /* 位置：契约 pill 之后（语义/ns pill 之前），与顶栏既有 pill 同款式 */
+    var contractPill = el("pill-contract");
+    if (contractPill && contractPill.parentNode) {
+      contractPill.parentNode.insertBefore(datasetPill, contractPill.nextSibling);
+    } else {
+      document.querySelector(".strip").appendChild(datasetPill);
+    }
+  }
+  var text = has ? value : "默认";
+  var b = datasetPill.lastChild;
+  if (b.textContent !== text) b.textContent = text;
+}
+
 /* ---------- 状态汇总表（state | count，复用 ViewViewView buildCountsTable 结构） ---------- */
 var countsBody = null;
 var countsNumHeader = null;   /* count 列表头，供 syncNumColumns 钉宽 */
@@ -941,7 +1013,9 @@ window.addEventListener("resize", function () {
   syncNumColumnsResizeTimer = setTimeout(syncNumColumns, 120);
 });
 async function loadSummary() {
-  var d = await apiGet("/api/summary");
+  var d = await apiGet("/api/summary" + datasetQueryLead());
+  /* 被动展示：响应顶层带 dataset 字段才出现/更新 pill；缺失不报错（见 updateDatasetPill） */
+  updateDatasetPill(d && typeof d.dataset === "string" ? d.dataset : null);
   var states = (d && d.states) || {};
   STATES.forEach(function (st) {
     var cell = countsStateCells[st], s = states[st];
@@ -1056,7 +1130,7 @@ function mergeRecords(rows) {
   return freshRows.length;
 }
 async function loadRecords(animateTop) {
-  var q = "/api/records?limit=" + currentLimit + "&offset=0" + (currentFilter ? "&state=" + encodeURIComponent(currentFilter) : "");
+  var q = "/api/records?limit=" + currentLimit + "&offset=0" + (currentFilter ? "&state=" + encodeURIComponent(currentFilter) : "") + datasetQuery();
   var d = await apiGet(q);
   var rows = Array.isArray(d && d.rows) ? d.rows : [];
   var firstLoad = lastTopRow === null;
@@ -1179,7 +1253,7 @@ async function loadHistogram() {
   /* demo 模式：用 demoHistData() 生成契约同形响应，渲染路径与真实模式完全一致 */
   var d = DEMO_MODE
     ? demoHistData()
-    : await apiGet("/api/histogram");
+    : await apiGet("/api/histogram" + datasetQueryLead());
   lastHistData = d;
   renderHistogram(d);
 }

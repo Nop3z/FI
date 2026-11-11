@@ -2,7 +2,8 @@
 
 单一职责的只读 HTTP 服务：
 - 转发技术团队已算好的派生数据（data/derived/*.json）
-- 流式分页读取实验 CSV（data/derived/{DATASET_PREFIX}.csv）
+- 流式分页读取实验 CSV（data/derived/<dataset>.csv；数据集前缀支持
+  FI_DATASET_PREFIX 环境变量与 ?dataset= 查询参数动态选择，见 /api/datasets）
 - 转发 AI 活动流（dashboard/activity.py）
 - 暴露契约版本信息（docs/contracts/）
 - 静态文件服务（dashboard/static/index.html）
@@ -42,7 +43,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 _APP_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_APP_DIR))
 import activity  # noqa: E402  (本目录现成模块，直接复用)
-DATASET_PREFIX = os.environ.get("FI_DATASET_PREFIX", "dataset")
 
 # 复用 vendor 的 _TailReader（纯标准库尾窗读取）；目录缺失时回退内置实现。
 _VENDOR_SRC = _APP_DIR / "vendor" / "viewviewview" / "src"
@@ -62,23 +62,110 @@ CONTRACTS_DIR = BASE_DIR / "docs" / "contracts"
 SCHEMAS_DIR = CONTRACTS_DIR / "schemas"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-# 实验记录 CSV：契约描述在 data/derived/ 下，实际批次文件在项目根目录，
-# 两处都探测，以实际存在者为准（meta.json inputs.csv.path 也指向根目录文件）。
-def _resolve_csv_path() -> Path:
-    candidates = [
-        DERIVED_DIR / f"{DATASET_PREFIX}.csv",
-        BASE_DIR / f"{DATASET_PREFIX}.csv",
-    ]
+# ---------------------------------------------------------------------------
+# 数据集参数化：所有派生数据文件都按「数据集前缀」定位（<prefix>.csv、
+# <prefix>.state-counts.json 等）。代码不写死任何具体数据集名；换数据集
+# 不改代码、不重启服务：AI 直接用 ?dataset= 查询参数（见 /api/datasets）。
+# ---------------------------------------------------------------------------
+
+DATASET_ENV_VAR = "FI_DATASET_PREFIX"
+DATASET_FALLBACK_PREFIX = "dataset"
+# 白名单：字母数字开头，仅含 [A-Za-z0-9._-]，长度 ≤ 64；额外禁止 ".."（防路径穿越）。
+_DATASET_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_STATE_COUNTS_TAIL = ".state-counts.json"
+
+
+def _validate_dataset(prefix):
+    """数据集前缀白名单校验；不合法（含 ".." 路径穿越尝试）返回 None。"""
+    if not isinstance(prefix, str) or not prefix or ".." in prefix:
+        return None
+    if not _DATASET_PREFIX_RE.fullmatch(prefix):
+        return None
+    return prefix
+
+
+def _scan_dataset_prefixes() -> list[str]:
+    """扫描现存数据集前缀，取词干并集，返回排序列表。
+
+    来源：data/derived/*.state-counts.json、data/derived/*.csv、项目根目录 *.csv。
+    候补词干需通过 _validate_dataset 白名单（顺带排除 `_` 开头的调试/合成
+    产物，与 sync.py 的 skip 约定一致），无效词干不进入数据集清单。
+    """
+    prefixes: set[str] = set()
+    for path in DERIVED_DIR.glob(f"*{_STATE_COUNTS_TAIL}"):
+        prefixes.add(_validate_dataset(path.name[: -len(_STATE_COUNTS_TAIL)]) or "")
+    for path in DERIVED_DIR.glob("*.csv"):
+        prefixes.add(_validate_dataset(path.stem) or "")
+    for path in BASE_DIR.glob("*.csv"):
+        prefixes.add(_validate_dataset(path.stem) or "")
+    prefixes.discard("")
+    return sorted(prefixes)
+
+
+def _resolve_active_prefix() -> str:
+    """活跃前缀三级优先级：FI_DATASET_PREFIX → 扫描结果恰有一个数据集 → 兜底。
+
+    每次请求时重新解析（开销仅为两次目录 glob）：环境变量在进程内不变，
+    但新数据集文件落盘后无需重启即可被扫描到并通过 ?dataset= 选用；
+    恰有一个数据集时自动选中，保证主仓开箱即用。
+    """
+    env_value = os.environ.get(DATASET_ENV_VAR, "").strip()
+    if env_value and _validate_dataset(env_value):
+        return env_value
+    scanned = _scan_dataset_prefixes()
+    if len(scanned) == 1:
+        return scanned[0]
+    return DATASET_FALLBACK_PREFIX
+
+
+def _resolve_dataset_paths(prefix: str) -> dict:
+    """某前缀的数据文件路径组。
+
+    实验记录 CSV：契约描述在 data/derived/ 下，实际批次文件可能也在项目根目录，
+    两处都作为候选，以实际存在者为准（meta.json inputs.csv.path 指向根目录文件）。
+    """
+    return {
+        "csv_candidates": [
+            DERIVED_DIR / f"{prefix}.csv",
+            BASE_DIR / f"{prefix}.csv",
+        ],
+        "state_counts": DERIVED_DIR / f"{prefix}.state-counts.json",
+        "histograms": DERIVED_DIR / f"{prefix}.delay-pulse-histograms.json",
+        "meta": DERIVED_DIR / f"{prefix}.meta.json",
+    }
+
+
+def _pick_csv_path(paths: dict) -> Path:
+    """从 csv 候选中取第一个实际存在者；都不存在时返回首个候选（供 404 报因）。"""
+    candidates = paths["csv_candidates"]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
     return candidates[0]
 
 
-CSV_PATH = _resolve_csv_path()
-STATE_COUNTS_PATH = DERIVED_DIR / f"{DATASET_PREFIX}.state-counts.json"
-HISTOGRAMS_PATH = DERIVED_DIR / f"{DATASET_PREFIX}.delay-pulse-histograms.json"
-META_PATH = DERIVED_DIR / f"{DATASET_PREFIX}.meta.json"
+def _dataset_param(query: dict):
+    """解析 ?dataset=：缺省=活跃前缀。
+
+    返回 (prefix, None)；显式给出但不合法时返回 (None, (body, 400))，
+    body 结构与既有错误惯例一致（generated_utc / data_source / error / missing_reason）。
+    """
+    raw = query.get("dataset", [None])[0]
+    if raw is None or raw == "":
+        return _resolve_active_prefix(), None
+    prefix = _validate_dataset(raw)
+    if prefix is None:
+        body = base_envelope("none")
+        body.update({"error": "invalid_dataset", "missing_reason": "dataset 参数不合法"})
+        return None, (body, 400)
+    return prefix, None
+
+
+def _dataset_missing(missing_reason: str):
+    """数据集所需文件缺失的结构化 404（不裸 500）。"""
+    body = base_envelope("none")
+    body.update({"error": "dataset_missing", "missing_reason": missing_reason})
+    return body, 404
 CHANGELOG_PATH = CONTRACTS_DIR / "CHANGELOG.md"
 STATUS_SEMANTICS_PATH = CONTRACTS_DIR / "status-semantics.md"
 COMMON_DEFS_PATH = SCHEMAS_DIR / "common.defs.json"
@@ -169,10 +256,10 @@ def base_envelope(data_source) -> dict:
 # - 总数一律来自 state-counts.json（技术团队已算好），不扫 CSV 计数。
 # ---------------------------------------------------------------------------
 
-def csv_scan_count(state_filter: str | None) -> int:
+def csv_scan_count(csv_path: Path, state_filter: str | None) -> int:
     """统计匹配行数（仅当 state-counts.json 缺失时兜底使用）。"""
     total = 0
-    with CSV_PATH.open("r", encoding="utf-8", newline="") as handle:
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         next(reader, None)  # header
         if state_filter is None:
@@ -184,7 +271,7 @@ def csv_scan_count(state_filter: str | None) -> int:
     return total
 
 
-def _tail_records(limit: int, total_matched: int) -> list[dict] | None:
+def _tail_records(csv_path: Path, limit: int, total_matched: int) -> list[dict] | None:
     """取最新 limit 条（尾窗），返回按行号倒序的记录；失败返回 None。
 
     _TailReader 返回文件尾部 limit 条（文件顺序），行号需加上
@@ -193,7 +280,7 @@ def _tail_records(limit: int, total_matched: int) -> list[dict] | None:
     if _TailReader is None:
         return None
     try:
-        _header, rows = _TailReader(str(CSV_PATH)).read(limit)
+        _header, rows = _TailReader(str(csv_path)).read(limit)
     except (OSError, ValueError):
         return None  # 坏行等异常走内置流式路径，不让单请求 500
     first_row_index = total_matched - len(rows) + 1
@@ -205,12 +292,12 @@ def _tail_records(limit: int, total_matched: int) -> list[dict] | None:
     return records
 
 
-def _stream_window(total_matched: int, offset: int, limit: int, state_filter: str | None):
+def _stream_window(csv_path: Path, total_matched: int, offset: int, limit: int, state_filter: str | None):
     """流式扫描取「匹配行中倒数第 offset+1 .. offset+limit 条」，倒序输出。"""
     skip = max(0, total_matched - offset - limit)
     records: list[dict] = []
     seen_matched = 0
-    with CSV_PATH.open("r", encoding="utf-8", newline="") as handle:
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         next(reader, None)  # header
         for row_index, row in enumerate(reader, start=1):
@@ -256,9 +343,17 @@ def api_records(query: dict) -> tuple[dict, int]:
     if offset is None:
         return _bad_request("offset 必须是非负整数")
     state_filter = query.get("state", [None])[0]
+    prefix, err = _dataset_param(query)
+    if err is not None:
+        return err
+
+    paths = _resolve_dataset_paths(prefix)
+    csv_path = _pick_csv_path(paths)
+    if not csv_path.is_file():
+        return _dataset_missing(f"{prefix}.csv（data/derived/ 与项目根目录均未找到）")
 
     # 总数来自 state-counts.json（技术团队已算好），缺失时才兜底流式计数。
-    state_counts_doc = load_json(STATE_COUNTS_PATH)
+    state_counts_doc = load_json(paths["state_counts"])
     if state_filter:
         known = None
         if isinstance(state_counts_doc, dict):
@@ -266,30 +361,31 @@ def api_records(query: dict) -> tuple[dict, int]:
         if isinstance(known, dict) and isinstance(known.get("count"), int):
             total_matched = known["count"]
         else:
-            total_matched = csv_scan_count(state_filter)
+            total_matched = csv_scan_count(csv_path, state_filter)
     else:
         total_matched = None
         if isinstance(state_counts_doc, dict):
             total_matched = state_counts_doc.get("total_rows")
         if not isinstance(total_matched, int):
-            total_matched = csv_scan_count(None)
+            total_matched = csv_scan_count(csv_path, None)
 
     read_mode = "stream-scan"
     if offset >= total_matched:
         records: list[dict] = []
     elif not state_filter and offset == 0:
         # 首屏最新窗口：_TailReader 尾窗读取，O(limit) 内存，不全扫文件
-        tail = _tail_records(limit, total_matched)
+        tail = _tail_records(csv_path, limit, total_matched)
         if tail is not None:
             records = tail
             read_mode = TAIL_READER_SOURCE
         else:
-            records = _stream_window(total_matched, offset, limit, state_filter)
+            records = _stream_window(csv_path, total_matched, offset, limit, state_filter)
     else:
-        records = _stream_window(total_matched, offset, limit, state_filter)
+        records = _stream_window(csv_path, total_matched, offset, limit, state_filter)
 
-    body = base_envelope(str(CSV_PATH.relative_to(BASE_DIR)))
+    body = base_envelope(str(csv_path.relative_to(BASE_DIR)))
     body.update({
+        "dataset": prefix,
         "total_matched": total_matched,
         "offset": offset,
         "limit": limit,
@@ -349,25 +445,66 @@ def _contract_version() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# /api/datasets：数据集清单与当前活跃前缀（不依赖任何数据集文件本身）
+#
+# 无数据时返回空 datasets 列表，不报错；has_* 以文件存在性实时判定，
+# 故新数据集落盘后无需重启即出现在清单中。
+# ---------------------------------------------------------------------------
+
+def api_datasets() -> tuple[dict, int]:
+    body = base_envelope("service")
+    prefixes = _scan_dataset_prefixes()
+    # 环境变量固定的前缀即使扫描不到（如该数据集尚无 csv/state-counts 产物）
+    # 也列入清单，避免出现 active 不在 datasets 里的费解状态。
+    env_value = os.environ.get(DATASET_ENV_VAR, "").strip()
+    env_prefix = _validate_dataset(env_value)
+    if env_prefix and env_prefix not in prefixes:
+        prefixes = sorted([env_prefix, *prefixes])
+    entries = []
+    for prefix in prefixes:
+        paths = _resolve_dataset_paths(prefix)
+        entries.append({
+            "prefix": prefix,
+            "has_csv": any(candidate.is_file() for candidate in paths["csv_candidates"]),
+            "has_state_counts": paths["state_counts"].is_file(),
+            "has_histograms": paths["histograms"].is_file(),
+            "has_meta": paths["meta"].is_file(),
+        })
+    body.update({
+        "readonly": True,
+        "active": _resolve_active_prefix(),
+        "datasets": entries,
+    })
+    return body, 200
+
+
+# ---------------------------------------------------------------------------
 # /api/summary 与 /api/histogram：转发派生 JSON，不重算
 # ---------------------------------------------------------------------------
 
-def api_summary() -> tuple[dict, int]:
-    state_counts = load_json(STATE_COUNTS_PATH)
-    meta = load_json(META_PATH)
-    histograms = load_json(HISTOGRAMS_PATH)
+def api_summary(query: dict) -> tuple[dict, int]:
+    prefix, err = _dataset_param(query)
+    if err is not None:
+        return err
+    paths = _resolve_dataset_paths(prefix)
+    if not paths["state_counts"].is_file():
+        return _dataset_missing(f"{prefix}.state-counts.json（data/derived/ 下未找到）")
+    state_counts = load_json(paths["state_counts"])
+    meta = load_json(paths["meta"])
+    histograms = load_json(paths["histograms"])
     contract = _contract_version()
 
     if state_counts is None:
-        body = base_envelope(str(STATE_COUNTS_PATH.relative_to(BASE_DIR)))
-        body.update({"error": "data_missing", "missing_reason": f"无法读取 {STATE_COUNTS_PATH.name}"})
+        body = base_envelope(str(paths["state_counts"].relative_to(BASE_DIR)))
+        body.update({"error": "data_missing", "missing_reason": f"无法读取 {paths['state_counts'].name}"})
         return body, 500
 
     body = base_envelope({
-        "state_counts": str(STATE_COUNTS_PATH.relative_to(BASE_DIR)),
-        "meta": str(META_PATH.relative_to(BASE_DIR)),
-        "histograms": str(HISTOGRAMS_PATH.relative_to(BASE_DIR)),
+        "state_counts": str(paths["state_counts"].relative_to(BASE_DIR)),
+        "meta": str(paths["meta"].relative_to(BASE_DIR)),
+        "histograms": str(paths["histograms"].relative_to(BASE_DIR)),
     })
+    body["dataset"] = prefix
     body.update({
         "total_rows": state_counts.get("total_rows") if isinstance(state_counts, dict) else None,
         # 状态标签为原始字面量，语义未证实（unconfirmed-v0.1），不做业务化改写
@@ -385,11 +522,19 @@ def api_summary() -> tuple[dict, int]:
     return body, 200
 
 
-def api_histogram() -> tuple[dict, int]:
-    histograms = load_json(HISTOGRAMS_PATH)
-    body = base_envelope(str(HISTOGRAMS_PATH.relative_to(BASE_DIR)))
+def api_histogram(query: dict) -> tuple[dict, int]:
+    prefix, err = _dataset_param(query)
+    if err is not None:
+        return err
+    paths = _resolve_dataset_paths(prefix)
+    histograms_path = paths["histograms"]
+    if not histograms_path.is_file():
+        return _dataset_missing(f"{prefix}.delay-pulse-histograms.json（data/derived/ 下未找到）")
+    histograms = load_json(histograms_path)
+    body = base_envelope(str(histograms_path.relative_to(BASE_DIR)))
+    body["dataset"] = prefix
     if histograms is None:
-        body.update({"error": "data_missing", "missing_reason": f"无法读取 {HISTOGRAMS_PATH.name}"})
+        body.update({"error": "data_missing", "missing_reason": f"无法读取 {histograms_path.name}"})
         return body, 500
     body.update({
         "histograms": histograms,
@@ -500,7 +645,9 @@ def api_contracts() -> tuple[dict, int]:
     changelog_text = read_text(CHANGELOG_PATH)
     defs_doc = load_json(COMMON_DEFS_PATH)
     status_text = read_text(STATUS_SEMANTICS_PATH)
-    meta = load_json(META_PATH)
+    # 与数据集无参数关联（不接受 ?dataset=），沿用当前活跃前缀的批次 meta。
+    active_paths = _resolve_dataset_paths(_resolve_active_prefix())
+    meta = load_json(active_paths["meta"])
 
     body = base_envelope({
         "changelog": "docs/contracts/CHANGELOG.md",
@@ -689,14 +836,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 body = base_envelope("service")
                 body.update({"status": "ok", "service": "fi-dashboard", "readonly": True})
                 self._send_json(body)
+            elif path == "/api/datasets":
+                payload, status = api_datasets()
+                self._send_json(payload, status)
             elif path == "/api/summary":
-                payload, status = api_summary()
+                payload, status = api_summary(query)
                 self._send_json(payload, status)
             elif path == "/api/records":
                 payload, status = api_records(query)
                 self._send_json(payload, status)
             elif path == "/api/histogram":
-                payload, status = api_histogram()
+                payload, status = api_histogram(query)
                 self._send_json(payload, status)
             elif path == "/api/activity":
                 payload, status = api_activity(query)
@@ -713,7 +863,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 (data, content_type), status = result
                 self._send_bytes(data, content_type, status)
             else:
-                self._send_error_json(404, f"未知路径：{path}（可用：/api/health, /api/summary, "
+                self._send_error_json(404, f"未知路径：{path}（可用：/api/health, /api/datasets, /api/summary, "
                                            "/api/records, /api/histogram, /api/activity, /api/contracts, /）")
         except BrokenPipeError:
             pass

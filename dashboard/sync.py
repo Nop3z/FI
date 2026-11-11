@@ -18,13 +18,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import os
-DATASET_PREFIX = os.environ.get("FI_DATASET_PREFIX", "dataset")
 
 ROOT = Path(__file__).resolve().parents[1]
 DASH = Path(__file__).resolve().parent
@@ -40,44 +39,83 @@ PROFILES = ROOT / "profiles"
 HASH_LIMIT = 8 * 1024 * 1024
 
 # app.py 当前实际消费的数据产物（新增产物若不在其中，会被标记为未消费）。
-CONSUMED_ARTIFACTS = {
-    f"{DATASET_PREFIX}.meta.json",
-    f"{DATASET_PREFIX}.experiment-scan.json",
-    f"{DATASET_PREFIX}.analysis-result.sample.json",
-    f"{DATASET_PREFIX}.state-counts.json",
-    f"{DATASET_PREFIX}.error-codes.json",
-    f"{DATASET_PREFIX}.pointwise-rates.json",
-    f"{DATASET_PREFIX}.campaign-records.jsonl",
-    # v0.3.0 批次新增展示（2026-11-09）：异常分析、命令面、帧终审与覆盖类产物
-    f"{DATASET_PREFIX}.anomaly-report.json",
-    f"{DATASET_PREFIX}.isp-command-surface.json",
-    f"{DATASET_PREFIX}.grid-occupancy.json",
-    f"{DATASET_PREFIX}.clusters.json",
-    f"{DATASET_PREFIX}.run-order.json",
-    f"{DATASET_PREFIX}.segments.json",
-    f"{DATASET_PREFIX}.error-code-attribution.json",
-    f"{DATASET_PREFIX}.candidates-sample.json",
-    # 2026-11-10 批次（位翻转 / 注入靶点 / 实机方案）：各自有专属展示区块
-    f"{DATASET_PREFIX}.bitflip-hypothesis.json",
+# 与数据集前缀绑定的产物在运行时按前缀展开，代码里不写死任何具体数据集名；
+# 前缀来自 FI_DATASET_PREFIX 环境变量（非空时覆盖）或目录扫描（默认行为不变）。
+DATASET_ENV_VAR = "FI_DATASET_PREFIX"
+_DATASET_FALLBACK_PREFIX = "dataset"
+_CAMPAIGN_RECORDS_TAIL = ".campaign-records.jsonl"
+
+# 与数据集前缀绑定的产物名（<PREFIX>.<name>）。
+_DATASET_ARTIFACT_NAMES = (
+    "meta.json",
+    "experiment-scan.json",
+    "analysis-result.sample.json",
+    "state-counts.json",
+    "error-codes.json",
+    "pointwise-rates.json",
+    "campaign-records.jsonl",
+    # v0.3.0 批次新增展示：异常分析、命令面、帧终审与覆盖类产物
+    "anomaly-report.json",
+    "isp-command-surface.json",
+    "grid-occupancy.json",
+    "clusters.json",
+    "run-order.json",
+    "segments.json",
+    "error-code-attribution.json",
+    "candidates-sample.json",
+    # 位翻转 / 注入靶点 / 实机方案批次：各自有专属展示区块
+    "bitflip-hypothesis.json",
+    # 看板重写后核对补登：此项本是 /api/histogram 的实际数据源
+    # （delay_counts_by_state 摊平为 series），此前被误列为「未展示」。
+    # 注：sample-run-*.json 属纯运行配置（人读/调用入参），按规则保留在 unconsumed。
+    "delay-pulse-histograms.json",
+)
+
+# 不带数据集前缀的独立产物。
+_STANDALONE_ARTIFACTS = {
     "bitflip-key-evidence.json",
     "injection-targets.json",
     "live-injection-plan.json",
     "bitflip.config.json",
     "v13c-frame-audit.json",
-    # 2026-11-10 实机首批批次：实机 anomaly-report 已有专属区块「实机首批数据」，
-    # 与历史批次并列展示（不合并统计口径）。
-    "live-20261110.anomaly-report.json",
-    # 2026-11-11 看板重写后核对补登：此项本是 /api/histogram 的实际数据源
-    # （delay_counts_by_state 摊平为 series），此前被误列为「未展示」。
-    # 注：sample-run-<DATASET>.json 属纯运行配置（人读/调用入参），按规则保留在 unconsumed。
-    f"{DATASET_PREFIX}.delay-pulse-histograms.json",
 }
+
+# 实机批次 anomaly-report：按通配模式跟踪现存文件，新批次落盘即被纳入
+# 已消费集合（不再标为未展示）；通配不到就不跟踪，不报错。
+_LIVE_ANOMALY_GLOB = "live-*.anomaly-report.json"
+
+
+def resolve_dataset_prefix() -> str:
+    """数据集前缀：FI_DATASET_PREFIX 非空时覆盖；否则按目录扫描推断。
+
+    空环境变量时的默认逻辑与旧版等价：主仓只有一个
+    <前缀>.campaign-records.jsonl 时取其词干（旧代码写死的即该词干）；
+    扫描不到时用兜底前缀（对应文件查不到，instance_versions 安全跳过）。
+    """
+    env_value = os.environ.get(DATASET_ENV_VAR, "").strip()
+    if env_value:
+        return env_value
+    stems = {
+        path.name[: -len(_CAMPAIGN_RECORDS_TAIL)]
+        for path in DERIVED.glob(f"*{_CAMPAIGN_RECORDS_TAIL}")
+        if path.is_file()
+    }
+    if len(stems) == 1:
+        return stems.pop()
+    return _DATASET_FALLBACK_PREFIX
+
+
+def consumed_artifacts(prefix: str) -> set[str]:
+    """当前前缀下 app.py 已消费的产物名集合（含动态通配的实机批次产物）。"""
+    consumed = {f"{prefix}.{name}" for name in _DATASET_ARTIFACT_NAMES}
+    consumed |= _STANDALONE_ARTIFACTS
+    consumed |= {path.name for path in DERIVED.glob(_LIVE_ANOMALY_GLOB) if path.is_file()}
+    return consumed
+
 
 # 派生目录里不参与「未展示产物」统计的前缀：_probe/_synthetic 为调试与合成数据产物。
 ARTIFACT_SKIP_PREFIXES = ("_",)
 ARTIFACT_SUFFIXES = (".json", ".jsonl", ".md")
-
-PREFIX = DATASET_PREFIX
 
 
 def now_utc() -> datetime:
@@ -229,7 +267,7 @@ def load_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def instance_versions(sources: dict[str, dict[str, Any]]) -> dict[str, str]:
+def instance_versions(sources: dict[str, dict[str, Any]], prefix: str) -> dict[str, str]:
     versions: dict[str, str] = {}
     for key, item in sources.items():
         path: Path = item["path"]
@@ -239,7 +277,7 @@ def instance_versions(sources: dict[str, dict[str, Any]]) -> dict[str, str]:
         version = data.get("schema_version")
         if isinstance(version, str):
             versions[path.name] = version
-    record = DERIVED / f"{PREFIX}.campaign-records.jsonl"
+    record = DERIVED / f"{prefix}.campaign-records.jsonl"
     if record.is_file():
         with record.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -306,6 +344,7 @@ def artifacts_inventory() -> list[str]:
 def build() -> dict[str, Any]:
     sources = collect_sources()
     previous = load_previous()
+    dataset_prefix = resolve_dataset_prefix()
     current: dict[str, dict[str, Any]] = {}
     for key, item in sources.items():
         try:
@@ -319,9 +358,10 @@ def build() -> dict[str, Any]:
     changelog_text = read_text(CONTRACTS / "CHANGELOG.md")
     semantics_text = read_text(CONTRACTS / "status-semantics.md")
     sections = parse_changelog(changelog_text)
-    versions = instance_versions(sources)
+    versions = instance_versions(sources, dataset_prefix)
     artifacts = artifacts_inventory()
-    unconsumed = sorted(name for name in artifacts if name not in CONSUMED_ARTIFACTS)
+    consumed = consumed_artifacts(dataset_prefix)
+    unconsumed = sorted(name for name in artifacts if name not in consumed)
 
     warnings: list[str] = []
     contract_version = parse_contract_version(changelog_text)

@@ -50,7 +50,7 @@ ViewWidget(
 from viewviewview.core import _TailReader
 from viewviewview.compat import _build_payload
 
-header, rows = _TailReader("{DATASET_PREFIX}.csv").read(200)   # O(200) 内存尾窗
+header, rows = _TailReader("<DATASET>.csv").read(200)   # O(200) 内存尾窗
 payload = _build_payload(header, rows, state="state")
 # payload = {columns, state_key, counts, rows(最新在前), total, window, version}
 ```
